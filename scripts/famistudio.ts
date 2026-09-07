@@ -42,17 +42,7 @@ interface Envelope {
   values: number[]; // int8_t
 }
 
-const VolumeMappingFull    = 0 as const;
-const VolumeMappingHalf    = 1 as const;
-const VolumeMappingQuarter = 2 as const;
-
-type VolumeMapping =
-  | typeof VolumeMappingFull
-  | typeof VolumeMappingHalf
-  | typeof VolumeMappingQuarter;
-
 interface Instrument {
-  volumeMapping: VolumeMapping;
   envelopes: Envelope[];
 }
 
@@ -61,9 +51,9 @@ interface Pattern {
 }
 
 const ChannelKindSine     = 0 as const;
-const ChannelKindSquare   = 1 as const;
-const ChannelKindTriangle = 2 as const;
-const ChannelKindSaw      = 3 as const;
+const ChannelKindTriangle = 1 as const;
+const ChannelKindSaw      = 2 as const;
+const ChannelKindSquare   = 3 as const;
 const ChannelKindWave     = 4 as const;
 const ChannelKindPCM      = 5 as const;
 const ChannelKindNoise    = 6 as const;
@@ -79,12 +69,14 @@ type ChannelKind =
 
 interface Channel {
   kind: ChannelKind;
+  initialVolume: number;
   patterns: Pattern[];
   instances: number[];
 }
 
 interface Song {
   length: number;
+  loop: number;
   channels: Channel[];
 }
 
@@ -105,30 +97,24 @@ function envelopeKind(type: string | undefined, relative: string | undefined): E
   return null;
 }
 
-function instrumentVolumeMapping(volumeMapping: string | undefined): VolumeMapping {
-  switch (volumeMapping) {
-    case 'Full': return VolumeMappingFull;
-    case 'Half': return VolumeMappingHalf;
-    case 'Quarter': return VolumeMappingQuarter;
-  }
-  return VolumeMappingFull;
-}
-
-function channelKind(type: string | undefined): { kind: ChannelKind, octaveOffset: number } | null {
+function channelKind(
+  type: string | undefined
+): { kind: ChannelKind; octaveOffset: number; volumeScale: number; dutyType: number } | null {
   switch (type) {
     case 'Square1':
     case 'Square2':
+      return { kind: ChannelKindSquare, octaveOffset: 1, volumeScale: 68, dutyType: 1 };
     case 'VRC6Square1':
     case 'VRC6Square2':
-      return { kind: ChannelKindSquare, octaveOffset: 1 };
+      return { kind: ChannelKindSquare, octaveOffset: 1, volumeScale: 127, dutyType: 2 };
     case 'Triangle':
-      return { kind: ChannelKindTriangle, octaveOffset: 0 };
+      return { kind: ChannelKindTriangle, octaveOffset: 0, volumeScale: -58, dutyType: 0 };
     case 'Noise':
-      return { kind: ChannelKindNoise, octaveOffset: 0 };
+      return { kind: ChannelKindNoise, octaveOffset: 0, volumeScale: 44, dutyType: 0 };
     case 'DPCM':
-      return { kind: ChannelKindPCM, octaveOffset: 0 };
+      return { kind: ChannelKindPCM, octaveOffset: 0, volumeScale: 255, dutyType: 0 };
     case 'VRC6Saw':
-      return { kind: ChannelKindSaw, octaveOffset: 1 };
+      return { kind: ChannelKindSaw, octaveOffset: 1, volumeScale: 116, dutyType: 0 };
     case 'N163Wave1':
     case 'N163Wave2':
     case 'N163Wave3':
@@ -137,7 +123,7 @@ function channelKind(type: string | undefined): { kind: ChannelKind, octaveOffse
     case 'N163Wave6':
     case 'N163Wave7':
     case 'N163Wave8':
-      return { kind: ChannelKindWave, octaveOffset: 1 };
+      return { kind: ChannelKindWave, octaveOffset: 1, volumeScale: 112, dutyType: 0 };
   }
   return null;
 }
@@ -166,21 +152,21 @@ const EV_INST1  = 0x8200;
 const EV_INST2  = 0x8300;
 const EV_VOL    = 0x8400;
 
-function num15to128(value: number) {
-  return Math.round(value * 128 / 15);
-}
-
 class Events {
   length: number;
+  volumeScale: number;
+  initialEventsSize: number;
   events: { frame: number; bias: number; wait?: number; value: number[] }[];
 
-  constructor(length: number) {
+  constructor(length: number, volumeScale: number) {
     this.length = length;
+    this.volumeScale = Math.abs(volumeScale);
     this.events = [{
       frame: length,
       bias: 9999,
       value: [EV_PATEND]
     }];
+    this.initialEventsSize = this.events.length;
   }
 
   note(
@@ -235,10 +221,11 @@ class Events {
     }
   }
 
-  volume(frame: number, volume: number) {
-    if (!Number.isInteger(volume) || volume < 0 || volume >= 129) {
-      throw new Error('Invalid volume');
+  volume(frame: number, volume: number, maxVolume: number) {
+    if (!Number.isInteger(volume) || volume < 0 || volume > maxVolume) {
+      throw new Error(`Unexpected volume ${volume} (expecting 0-${maxVolume})`);
     }
+    volume = Math.floor(volume * this.volumeScale / maxVolume);
     this.events.push({
       frame,
       bias: 1,
@@ -246,8 +233,8 @@ class Events {
     });
   }
 
-  done(): number[] | false {
-    if (this.events.length <= 1) {
+  done(force = false): number[] | false {
+    if (!force && this.events.length <= this.initialEventsSize) {
       return false; // empty events
     }
 
@@ -263,16 +250,15 @@ class Events {
     // remove automatic advancing by duration if events are in the way
     for (let i = 0; i < this.events.length; i++) {
       const e = this.events[i];
-      if ((e.value[0] & 0x8000) == EV_NOTE) {
+      if ((e.value[0] & 0x8000) == EV_NOTE && 'wait' in e && typeof e.wait === 'number') {
         // found note event... is the next event before duration?
-        const duration = e.value[1] & 0x07ff;
         if (
           i < this.events.length - 1 &&
-          this.events[i + 1].frame < e.frame + duration // next event is in the way?
+          this.events[i + 1].frame < e.frame + e.wait // next event is in the way?
         ) {
           // then we can't advance by duration :(
           delete e.wait;
-          e.value[1] &= 0xbfff;
+          e.value[1] &= 0xbfff; // remove 0x4000 flag
         }
       }
     }
@@ -453,56 +439,109 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
     }
   }
 
-  // parse envelope-based instruments
+  const instrumentByName = new Map(
+    project.children.filter(c => c.name === 'Instrument').map(c => [
+      c.attributes.get('Name') ?? '',
+      c
+    ])
+  );
   const instrumentNameToIndex = new Map<string, number>();
-  const instruments = project.children.filter(c => c.name === 'Instrument');
-  for (const instrument of instruments) {
+  function findInstrument(
+    name: string,
+    channelKind: ChannelKind,
+    volumeScale: number,
+    dutyType: number
+  ) {
+    if (name === '') return null;
+    // parse envelope-based instruments
+    const instrument = instrumentByName.get(name);
+    if (!instrument) {
+      throw new Error(`Missing instrument: ${name}`);
+    }
+    const volumeMapping = channelKind === ChannelKindSaw
+      ? instrument.attributes.get('Vrc6SawMasterVolume') ?? 'Full'
+      : 'Full';
+
     // TODO: convert N163Wave presets to regular instruments if possible
     // Sine, Triangle, Sawtooth, Square50%, Square25%
     // allows for triangle with volume! :)
-    const instrumentName = instrument.attributes.get('Name');
-    if (!instrumentName) {
-      throw new Error('Missing instrument name');
-    }
+
+    // check cache first
+    const key1 = `${name}\0${volumeMapping}\0${volumeScale}`;
+    const idx1 = instrumentNameToIndex.get(key1);
+    if (typeof idx1 === 'number') return idx1;
+    const key2 = `${name}\0@`;
+    const idx2 = instrumentNameToIndex.get(key2);
+    if (typeof idx2 === 'number') return idx2;
+
     const envelopes = instrument.children.filter(c => c.name === 'Envelope');
-    if (envelopes.length > 0) {
-      const envs: Envelope[] = [];
-      for (const envelope of envelopes) {
-        const attr = envelope.attributes;
-        const kind = envelopeKind(attr.get('Type'), attr.get('Relative'));
-        if (kind === null) {
-          console.error('Invalid envelope:', envelope);
-          process.exit(1);
-        }
-        const loop = parseFloat(attr.get('Loop') ?? '');
-        const release = parseFloat(attr.get('Release') ?? '');
-        const values = (attr.get('Values')?.split(',') || []).map(parseFloat);
-        if (values.length > 0) {
-          envs.push({
-            kind,
-            loop: isNaN(loop) ? -1 : loop,
-            release: isNaN(release) ? -1 : release,
-            values
+    if (envelopes.length <= 0) {
+      return -1;
+    }
+
+    const envs: Envelope[] = [];
+    let hasVolume = false;
+    for (const envelope of envelopes) {
+      const attr = envelope.attributes;
+      const kind = envelopeKind(attr.get('Type'), attr.get('Relative'));
+      if (kind === null) {
+        console.error(envelope);
+        throw new Error('Invalid envelope');
+      }
+      if (kind === EnvelopeKindDutyCycle && dutyType === 0) continue;
+      const loop = parseFloat(attr.get('Loop') ?? '');
+      const release = parseFloat(attr.get('Release') ?? '');
+      let values = (attr.get('Values')?.split(',') || []).map(parseFloat);
+      if (values.length > 0) {
+        if (kind === EnvelopeKindVolume) {
+          hasVolume = true;
+          // rescale volume according to volumeMapping and volumeScale
+          values = values.map(v => {
+            if (volumeScale < 0) {
+              // NES Triangle uses volume envelope as a gate
+              return v > 0 ? -volumeScale : 0;
+            }
+            const m = ({ Full: 63, Half: 31, Quarter: 15 })[volumeMapping];
+            if (typeof m !== 'number') {
+              throw new Error(`Invalid volume mapping: ${volumeMapping}`);
+            }
+            return Math.floor((v / 15) * (m / 63) * volumeScale);
+          });
+        } else if (kind === EnvelopeKindDutyCycle && dutyType === 1) {
+          // convert NES-style duty to VRC6-style duty
+          values = values.map(v => {
+            switch (v) {
+              case 0: return 1;
+              case 1: return 3;
+              case 2: return 7;
+              case 3: return 3;
+            }
+            throw new Error(`Unknown duty cycle envelope value: ${v}`);
           });
         }
+        envs.push({
+          kind,
+          loop: isNaN(loop) ? values.length - 1 : loop,
+          release: isNaN(release) ? values.length : release,
+          values
+        });
       }
-
-      instrumentNameToIndex.set(instrumentName, out.instruments.length);
-      out.instruments.push({
-        volumeMapping: instrumentVolumeMapping(instrument.attributes.get('Vrc6SawMasterVolume')),
-        envelopes: envs
-      });
-    } else {
-      instrumentNameToIndex.set(instrumentName, -1); // empty instrument
     }
     //const dpcmMapping = instrument.children.filter(c => c.name === 'DPCMMapping');
     // TODO: do something with dpcmMapping
+
+    const key = hasVolume ? `${name}\0${volumeMapping}\0${volumeScale}` : `${name}\0@`;
+    const idx = out.instruments.length;
+    instrumentNameToIndex.set(key, idx);
+    out.instruments.push({ envelopes: envs });
+    return idx;
   }
 
   // parse songs
   const songs = project.children.filter(c => c.name === 'Song');
   for (const song of songs) {
     const songLength = parseFloat(song.attributes.get('Length') ?? '');
+    const songLoop = parseFloat(song.attributes.get('LoopPoint') ?? '0');
     const patternLength = parseFloat(song.attributes.get('PatternLength') ?? '');
     const noteLength = parseFloat(song.attributes.get('NoteLength') ?? '');
     if (isNaN(songLength) || isNaN(patternLength) || isNaN(noteLength)) {
@@ -516,7 +555,7 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
         console.error('Invalid channel:', channel);
         process.exit(1);
       }
-      const { kind, octaveOffset } = chanKind;
+      const { kind, octaveOffset, volumeScale, dutyType } = chanKind;
 
       const patts: Pattern[] = [];
       const patterns = channel.children.filter(c => c.name === 'Pattern');
@@ -526,9 +565,8 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
         if (!patternName) {
           throw new Error('Missing pattern name');
         }
-        const events = new Events(patternLength * noteLength);
+        const events = new Events(patternLength * noteLength, volumeScale);
 
-        // TODO: generate event stream
         let lastInstrument = -1;
         const notes = pattern.children.filter(c => c.name === 'Note');
         for (const note of notes) {
@@ -549,10 +587,15 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
 
           const volume = parseFloat(getAttr('Volume'));
           if (!isNaN(volume)) {
-            events.volume(frame, num15to128(volume));
+            events.volume(frame, volume, 15);
           }
 
-          const thisInstrument = instrumentNameToIndex.get(getAttr('Instrument'));
+          const thisInstrument = findInstrument(
+            getAttr('Instrument'),
+            kind,
+            volumeScale,
+            dutyType
+          );
           if (typeof thisInstrument === 'number') {
             if (thisInstrument !== lastInstrument) {
               events.instrument(frame, thisInstrument);
@@ -606,13 +649,36 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
       if (insts.some(i => i >= 0)) {
         chans.push({
           kind,
+          initialVolume: volumeScale,
           patterns: patts,
           instances: insts,
         });
       }
     }
+
+    // check for completely empty columns and insert an empty pattern to take up time if needed
+    let emptyPatternIndex = -1;
+    for (let column = 0; column < songLength; column++) {
+      if (chans.some(ch => ch.instances[column] >= 0)) {
+        // a channel defines a pattern in this column, so skip
+        continue;
+      }
+      // empty column!
+      if (emptyPatternIndex < 0) {
+        const ev = new Events(patternLength * noteLength, 255);
+        const events = ev.done(true);
+        if (!events) {
+          throw new Error('Empty events failed to generate');
+        }
+        emptyPatternIndex = chans[0].patterns.length;
+        chans[0].patterns.push({ events });
+      }
+      chans[0].instances[column] = emptyPatternIndex;
+    }
+
     out.songs.push({
       length: songLength,
+      loop: songLoop,
       channels: chans
     });
   }
@@ -666,8 +732,8 @@ function serializeOut(out: OutputFile): number[] {
     align32();
     instRewrite.shift()?.(bytes.length);
     const instrumentStart = bytes.length;
-    write8(instrument.volumeMapping);
     write8(instrument.envelopes.length);
+    write8(0); // reserved
     write8(0); // reserved
     write8(0); // reserved
     const envRewrite = instrument.envelopes.map(() => rewrite32());
@@ -694,15 +760,14 @@ function serializeOut(out: OutputFile): number[] {
     songRewrite.shift()?.(bytes.length);
     if (song.channels.length < 1) throw new Error('No channels');
     if (song.channels.length > 16) throw new Error('Too many channels');
-    write8(song.channels.length - 1);
-    write8(0); // reserved
+    write16((song.loop << 4) | (song.channels.length - 1));
     write16(song.length);
     const chanRewrite = song.channels.map(() => rewrite32());
     for (const channel of song.channels) {
       align32();
       chanRewrite.shift()?.(bytes.length);
       write8(channel.kind);
-      write8(0); // reserved
+      write8(channel.initialVolume);
       write16(channel.patterns.length);
       if (channel.instances.length !== song.length) {
         throw new Error("Instance length doesn't match song length");

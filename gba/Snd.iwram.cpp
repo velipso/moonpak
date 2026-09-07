@@ -11,17 +11,17 @@ static const int16_t adpcmStepSize[] = {
 
 static const int8_t adpcmIndex[] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
 
-void sndAdpcmOutputSet(
-  int &state,
-  uint8_t *&data,
-  int16_t *output,
-  int count,
-  int volume
+void sndRenderAdpcmSet(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *state,
+  uint8_t *&data
 ) {
-  int sample = (int16_t)(state & 0xffff);
-  int index = (state >> 16) & 0x7f;
-  bool secondHalf = state & 0x800000;
-  while (count > 0) {
+  int sample = (int16_t)(*state & 0xffff);
+  int index = (*state >> 16) & 0x7f;
+  bool secondHalf = *state & 0x00800000;
+  while (samples > 0) {
     int nibble;
     if (secondHalf) {
       nibble = *data >> 4;
@@ -46,23 +46,23 @@ void sndAdpcmOutputSet(
     if (sample > 32767) sample = 32767;
     else if (sample < -32768) sample = -32768;
 
-    *output++ = (sample * volume) >> 4; // SET
-    count--;
+    *out++ = (sample * volume) >> 8; // SET
+    samples--;
   }
-  state = (secondHalf ? 0x800000 : 0) | (index << 16) | sample;
+  *state = (secondHalf ? 0x00800000 : 0) | (index << 16) | (sample & 0xffff);
 }
 
-void sndAdpcmOutputAdd(
-  int &state,
-  uint8_t *&data,
-  int16_t *output,
-  int count,
-  int volume
+void sndRenderAdpcmAdd(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *state,
+  uint8_t *&data
 ) {
-  int sample = (int16_t)(state & 0xffff);
-  int index = (state >> 16) & 0x7f;
-  bool secondHalf = state & 0x800000;
-  while (count > 0) {
+  int sample = (int16_t)(*state & 0xffff);
+  int index = (*state >> 16) & 0x7f;
+  bool secondHalf = *state & 0x00800000;
+  while (samples > 0) {
     int nibble;
     if (secondHalf) {
       nibble = *data >> 4;
@@ -87,8 +87,200 @@ void sndAdpcmOutputAdd(
     if (sample > 32767) sample = 32767;
     else if (sample < -32768) sample = -32768;
 
-    *output++ += (sample * volume) >> 4; // ADD
-    count--;
+    *out++ += (sample * volume) >> 8; // ADD
+    samples--;
   }
-  state = (secondHalf ? 0x800000 : 0) | (index << 16) | sample;
+  *state = (secondHalf ? 0x00800000 : 0) | (index << 16) | (sample & 0xffff);
+}
+
+void sndRenderWaveTableSet1024(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  const int16_t *waveTable
+) {
+  uint32_t p = *phase;
+  while (samples > 0) {
+    out[0] = (volume * waveTable[p >> 22]) >> 8;
+    p += dphase;
+    out[1] = (volume * waveTable[p >> 22]) >> 8;
+    p += dphase;
+    out[2] = (volume * waveTable[p >> 22]) >> 8;
+    p += dphase;
+    out[3] = (volume * waveTable[p >> 22]) >> 8;
+    p += dphase;
+    samples -= 4;
+    out += 4;
+  }
+  *phase = p;
+}
+
+void sndRenderWaveTableAdd1024(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  const int16_t *waveTable
+) {
+  uint32_t p = *phase;
+  while (samples > 0) {
+    out[0] += (volume * waveTable[p >> 22]) >> 8;
+    p += dphase;
+    out[1] += (volume * waveTable[p >> 22]) >> 8;
+    p += dphase;
+    out[2] += (volume * waveTable[p >> 22]) >> 8;
+    p += dphase;
+    out[3] += (volume * waveTable[p >> 22]) >> 8;
+    p += dphase;
+    samples -= 4;
+    out += 4;
+  }
+  *phase = p;
+}
+
+void sndRenderWaveTableSet512(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  const int16_t *waveTable
+) {
+  uint32_t p = *phase;
+  while (samples > 0) {
+    out[0] = (volume * waveTable[p >> 23]) >> 8;
+    p += dphase;
+    out[1] = (volume * waveTable[p >> 23]) >> 8;
+    p += dphase;
+    out[2] = (volume * waveTable[p >> 23]) >> 8;
+    p += dphase;
+    out[3] = (volume * waveTable[p >> 23]) >> 8;
+    p += dphase;
+    samples -= 4;
+    out += 4;
+  }
+  *phase = p;
+}
+
+void sndRenderWaveTableAdd512(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  const int16_t *waveTable
+) {
+  uint32_t p = *phase;
+  while (samples > 0) {
+    out[0] += (volume * waveTable[p >> 23]) >> 8;
+    p += dphase;
+    out[1] += (volume * waveTable[p >> 23]) >> 8;
+    p += dphase;
+    out[2] += (volume * waveTable[p >> 23]) >> 8;
+    p += dphase;
+    out[3] += (volume * waveTable[p >> 23]) >> 8;
+    p += dphase;
+    samples -= 4;
+    out += 4;
+  }
+  *phase = p;
+}
+
+void sndRenderWaveTableSet256(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  const int16_t *waveTable
+) {
+  uint32_t p = *phase;
+  while (samples > 0) {
+    out[0] = (volume * waveTable[p >> 24]) >> 8;
+    p += dphase;
+    out[1] = (volume * waveTable[p >> 24]) >> 8;
+    p += dphase;
+    out[2] = (volume * waveTable[p >> 24]) >> 8;
+    p += dphase;
+    out[3] = (volume * waveTable[p >> 24]) >> 8;
+    p += dphase;
+    samples -= 4;
+    out += 4;
+  }
+  *phase = p;
+}
+
+void sndRenderWaveTableAdd256(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  const int16_t *waveTable
+) {
+  uint32_t p = *phase;
+  while (samples > 0) {
+    out[0] += (volume * waveTable[p >> 24]) >> 8;
+    p += dphase;
+    out[1] += (volume * waveTable[p >> 24]) >> 8;
+    p += dphase;
+    out[2] += (volume * waveTable[p >> 24]) >> 8;
+    p += dphase;
+    out[3] += (volume * waveTable[p >> 24]) >> 8;
+    p += dphase;
+    samples -= 4;
+    out += 4;
+  }
+  *phase = p;
+}
+
+void sndRenderWaveTableSet128(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  const int16_t *waveTable
+) {
+  uint32_t p = *phase;
+  while (samples > 0) {
+    out[0] = (volume * waveTable[p >> 25]) >> 8; // SET
+    p += dphase;
+    out[1] = (volume * waveTable[p >> 25]) >> 8;
+    p += dphase;
+    out[2] = (volume * waveTable[p >> 25]) >> 8;
+    p += dphase;
+    out[3] = (volume * waveTable[p >> 25]) >> 8;
+    p += dphase;
+    samples -= 4;
+    out += 4;
+  }
+  *phase = p;
+}
+
+void sndRenderWaveTableAdd128(
+  int16_t *out,
+  uint32_t samples,
+  uint32_t volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  const int16_t *waveTable
+) {
+  uint32_t p = *phase;
+  while (samples > 0) {
+    out[0] += (volume * waveTable[p >> 25]) >> 8; // ADD
+    p += dphase;
+    out[1] += (volume * waveTable[p >> 25]) >> 8;
+    p += dphase;
+    out[2] += (volume * waveTable[p >> 25]) >> 8;
+    p += dphase;
+    out[3] += (volume * waveTable[p >> 25]) >> 8;
+    p += dphase;
+    samples -= 4;
+    out += 4;
+  }
+  *phase = p;
 }

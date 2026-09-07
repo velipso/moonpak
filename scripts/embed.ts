@@ -20,7 +20,7 @@ function printUsage(error?: string): never {
     '-n <path>    Relative directory for naming identifier\n' +
     '             Ex: -n root/tgt/ root/tgt/data/palette.bin\n' +
     '             Identifier is named from input filename relative to "root/tgt/",\n' +
-    '             so from "data/palette.bin" which becomes "dataPaletteBin"\n\n' +
+    '             so from "data/palette.bin" which becomes "dataPalette"\n\n' +
     '<input>      Input binary file (file does not need to exist,\n' +
     '             only the path and filename are used)'
   );
