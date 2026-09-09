@@ -58,21 +58,22 @@ struct SndChannel {
   const uint16_t *events;
   const FamiInstrument *instrument;
   struct {
-    int16_t cursor;
-    int8_t index;
+    uint16_t cursorIndex; // cursor:13, index:3
     union {
-      int8_t ivalue;
-      uint8_t uvalue;
+      int16_t ivalue;
+      uint16_t uvalue;
     };
   } env[7];
   uint8_t kind;
   uint8_t state; // stop(0), on(1), release(2)
+  uint8_t noteValue;
+  uint8_t reserved;
   int16_t wait;
-  int16_t pitch;
   int16_t release;
   int16_t duration;
   int16_t volume;
   uint32_t phase;
+  uint32_t noiseState;
 
   static constexpr int EnvVolume    = 0;
   static constexpr int EnvArpeggio  = 1;
@@ -82,37 +83,56 @@ struct SndChannel {
   static constexpr int EnvWave      = 5;
   static constexpr int EnvRepeat    = 6;
 
-  void reset(int ki, int vo, const uint16_t *ev) {
-    kind = ki;
-    volume = vo;
-    events = ev;
-    instrument = nullptr;
-    wait = 0;
-    pitch = -1;
-    state = 0;
+  static inline bool isUnsignedEnvelope(int i) {
+    return i == EnvVolume || i == EnvDutyCycle;
+  }
+
+  SndChannel() : events(nullptr), instrument(nullptr), kind(255), state(0), noteValue(0), wait(0),
+    release(0), duration(0), volume(0), phase(0), noiseState(1) {
     resetEnvelopes();
   }
 
+  void reset(int ki, int vo, const uint16_t *ev) {
+    events = ev;
+    wait = 0;
+    if (kind != ki) {
+      instrument = nullptr;
+      kind = ki;
+      state = 0;
+      noteValue = 0;
+      release = 0;
+      duration = 0;
+      volume = vo;
+      phase = 0;
+      noiseState = 1;
+      resetEnvelopes();
+    }
+  }
+
   void disable() {
-    events = nullptr;
+    kind = 255;
   }
 
   bool isEnabled() {
-    return events != nullptr;
+    return kind != 255;
   }
 
   void resetEnvelopes() {
     for (int i = 0; i < 7; i++) {
-      env[i].cursor = 0;
+      env[i].cursorIndex = 7; // index=7 means disabled
       env[i].ivalue = 0;
-      env[i].index = -1;
     }
     env[EnvVolume].uvalue = 255;
-    if (!instrument) return;
-    for (int en = 0; en < instrument->envelopesLength; en++) {
-      const FamiEnvelope *fenv = famiEnvelope(en);
-      env[fenv->kind].index = en;
-      env[fenv->kind].ivalue = fenv->ivalues[0];
+    if (instrument) {
+      for (int en = 0; en < instrument->envelopesLength; en++) {
+        const FamiEnvelope *fenv = famiEnvelope(en);
+        env[fenv->kind].cursorIndex = en;
+        if (isUnsignedEnvelope(fenv->kind)) {
+          env[fenv->kind].uvalue = fenv->uvalues[0];
+        } else {
+          env[fenv->kind].ivalue = fenv->ivalues[0];
+        }
+      }
     }
   }
 
@@ -123,12 +143,13 @@ struct SndChannel {
   }
 
   void famiInstrument(const FamiInstrument *finst) {
+    if (instrument == finst) return;
     instrument = finst;
     resetEnvelopes();
   }
 
   void note(int value, int rel, int dur, bool attack) {
-    pitch = value << 4;
+    noteValue = value;
     release = rel;
     duration = dur;
     state = 1; // note on
@@ -141,17 +162,30 @@ struct SndChannel {
   bool render(int16_t *out, int samples, bool first) {
     if (!state) return first;
 
+    int vol = (volume * env[EnvVolume].uvalue) >> 8;
+
     if (kind < 4) {
       // oscillator
-      int p = pitch + (env[EnvPitchAbs].ivalue << 1);
+      int timer;
+      uint32_t dphase;
+      {
+        timer = SndData::noteToTimer[noteValue];
+        int pitchBend = env[EnvPitchAbs].ivalue + env[EnvPitchRel].ivalue;
+        timer += pitchBend * 16;
+        if (timer < 0) timer = 0;
+        else if (timer > 65535) timer = 65535;
+        int t = timer >> 4;
+        int f = timer & 15;
+        int a = SndData::timerToDphase[t];
+        int b = SndData::timerToDphase[t + 1];
+        dphase = a + (((b - a) * f) >> 4);
+        dphase = (dphase << 14) | (dphase >> 2);
+      }
       int duty = env[EnvDutyCycle].uvalue;
       int wkind = SndData::waveKind(kind, duty);
-      int band = SndData::waveBand(p);
+      int band = SndData::waveBand(timer);
       int renderSize;
       const int16_t *waveTable = SndData::waveTable(wkind, band, &renderSize);
-      uint32_t dphase = SndData::frequencyPerPitch[p];
-      dphase = (dphase << 14) | (dphase >> 2);
-      int vol = (volume * env[EnvVolume].uvalue) >> 8;
       if (renderSize == 128) {
         if (first) {
           sndRenderWaveTableSet128(out, samples, vol, &phase, dphase, waveTable);
@@ -183,7 +217,13 @@ struct SndChannel {
     } else if (kind == 5) {
       // TODO: PCM
     } else if (kind == 6) {
-      // TODO: Noise
+      int dphase = SndData::dphasePerNoisePitch[(noteValue + 1) & 15];
+      if (first) {
+        sndRenderNoiseSet(out, samples, vol, &phase, dphase, &noiseState);
+      } else {
+        sndRenderNoiseAdd(out, samples, vol, &phase, dphase, &noiseState);
+      }
+      first = false;
     }
 
     duration--;
@@ -199,16 +239,28 @@ struct SndChannel {
 
     // advance envelopes
     for (int i = 0; i < 7; i++) {
-      if (env[i].index < 0) continue;
-      env[i].cursor++;
-      const FamiEnvelope *fenv = famiEnvelope(env[i].index);
-      if ((state == 1 && env[i].cursor >= fenv->release) || env[i].cursor >= fenv->valuesLength) {
-        env[i].cursor = state == 1 ? fenv->loop : fenv->valuesLength - 1;
-      }
-      env[i].ivalue = fenv->ivalues[env[i].cursor];
+      int index = env[i].cursorIndex & 7;
+      if (index == 7) continue; // index=7 means disabled
+      const FamiEnvelope *fenv = famiEnvelope(index);
+      int cursor = env[i].cursorIndex >> 3;
       if (i == EnvPitchRel) {
-        pitch += env[i].ivalue;
+        if (cursor >= fenv->valuesLength) continue;
+        cursor++;
+        if (cursor < fenv->valuesLength) {
+          env[i].ivalue += fenv->ivalues[cursor];
+        }
+      } else {
+        cursor++;
+        if ((state == 1 && cursor >= fenv->release) || cursor >= fenv->valuesLength) {
+          cursor = state == 1 ? fenv->loop : fenv->valuesLength - 1;
+        }
+        if (isUnsignedEnvelope(i)) {
+          env[i].uvalue = fenv->uvalues[cursor];
+        } else {
+          env[i].ivalue = fenv->ivalues[cursor];
+        }
       }
+      env[i].cursorIndex = (cursor << 3) | index;
     }
 
     return first;
@@ -241,10 +293,6 @@ struct SndSong {
 
       const FamiChannel &channel = *(const FamiChannel *)&root()[song.channelsOffset[ch]];
       int pa = channel.instances[column];
-      if (pa < 0) {
-        channels[ch].disable();
-        continue;
-      }
 
       const uint32_t *patternsOffset = (const uint32_t *)&root()[
         song.channelsOffset[ch] +
@@ -255,7 +303,7 @@ struct SndSong {
       channels[ch].reset(
         channel.kind,
         channel.initialVolume,
-        (const uint16_t *)&root()[patternsOffset[pa]]
+        pa < 0 ? nullptr : (const uint16_t *)&root()[patternsOffset[pa]]
       );
     }
   }
@@ -264,7 +312,7 @@ struct SndSong {
     bool patternEnd = false;
     for (int ch = 0; ch < 16; ch++) {
       SndChannel &channel = channels[ch];
-      if (!channel.isEnabled()) continue;
+      if (!channel.isEnabled() || !channel.events) continue;
       if (channel.wait > 0) {
         channel.wait--;
         if (channel.wait > 0) continue;
@@ -293,9 +341,14 @@ struct SndSong {
             case 0x00: // WAIT
               channel.wait += param + 1;
               goto next_channel;
-            case 0x01: // PATEND
-              patternEnd = true;
-              goto next_channel;
+            case 0x01:
+              if (param == 0) { // PATEND
+                patternEnd = true;
+                goto next_channel;
+              } else if (param == 1) { // NOINST
+                channel.famiInstrument(nullptr);
+              }
+              break;
             case 0x02: { // INST1
 set_instrument:
               const uint32_t *instOffset = (const uint32_t *)&root()[fami.instrumentsOffset];
@@ -402,7 +455,7 @@ int Snd::test(bool verbose) {
 
   int songIndex = 0;
 
-  const uint8_t *fami = dataSongsBasic;
+  const uint8_t *fami = dataSongsOutro;
   const FamiHeader &header = *(const FamiHeader *)fami;
 
   int songsOffset = header.songsOffset;

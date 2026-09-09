@@ -3,9 +3,44 @@
 #include <stdint.h>
 
 namespace SndData {
-  extern const uint16_t sampleCountPerFrame[32];
-  extern const uint16_t frequencyPerPitch[1728];
+  extern const uint16_t noteToTimer[108];
+  extern const uint16_t timerToDphase[4097];
   extern const uint16_t waveTables[27520];
+
+  static constexpr uint32_t dphasePerNoisePitch[16] = {
+    /*
+    const cpu = 1789773; // NES clock
+    const sampleRate = 32768;
+    for (const period of [
+      // source: https://www.nesdev.org/wiki/APU_Noise
+      4068, 2034, 1016, 762, 508, 380, 254, 202,
+      160, 128, 96, 64, 32, 16, 8, 4
+    ]) {
+      const rate = cpu / period;
+      const dphase = Math.min(
+        0xffffffff,
+        Math.floor((rate / sampleRate) * 0x100000000),
+      );
+      console.log(`0x${dphase.toString(16).padStart(8, '0')}u,`);
+    }
+    */
+    0x036fed7fu,
+    0x06dfdaffu,
+    0x0dc32cd9u,
+    0x12599122u,
+    0x1b8659b3u,
+    0x24cbdb9eu,
+    0x370cb366u,
+    0x45388656u,
+    0x57642999u,
+    0x6d3d3400u,
+    0x91a6f000u,
+    0xda7a6800u,
+    0xffffffffu,
+    0xffffffffu,
+    0xffffffffu,
+    0xffffffffu,
+  };
 
   static inline int waveKind(int channelKind, int duty) {
     // channel kind 0 => sine     => 0
@@ -15,25 +50,25 @@ namespace SndData {
     return channelKind < 3 ? channelKind : 3 + duty;
   }
 
-  static inline int waveBand(int pitch) {
+  static inline int waveBand(int timer) {
     /*
-    const A4 = 57;
-    const div = 16;
+    const cpu = 1789773; // NES
     const nyquist = 32768 / 2;
     for (let lp = 1; lp <= 8; lp++) {
       const h = (1024 >> lp) - 1; // highest harmonic
-      const p = div * (A4 + 12 * Math.log2(nyquist / (440 * h)));
-      console.log(lp, Math.floor(p) + 1);
+      const freq = nyquist / h;
+      const timer = cpu / (16 * freq) - 1;
+      console.log(lp, Math.floor(timer * 16));
     }
     */
-    if (pitch < 187) return 0;
-    if (pitch < 380) return 1;
-    if (pitch < 573) return 2;
-    if (pitch < 767) return 3;
-    if (pitch < 963) return 4;
-    if (pitch < 1164) return 5;
-    if (pitch < 1375) return 6;
-    if (pitch < 1610) return 7;
+    if (timer > 55805) return 0;
+    if (timer > 27839) return 1;
+    if (timer > 13857) return 2;
+    if (timer >  6866) return 3;
+    if (timer >  3370) return 4;
+    if (timer >  1622) return 5;
+    if (timer >   748) return 6;
+    if (timer >   311) return 7;
     return 8;
   }
 

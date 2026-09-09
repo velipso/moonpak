@@ -67,8 +67,7 @@ function generateWave({
         real * Math.cos(phase * n);
     }
 
-    value = Math.max(-1, Math.min(1, value));
-    out[i] = Math.round(value * 16383);
+    out[i] = Math.max(-32768, Math.min(32767, Math.round(value * 16383)));
   }
 
   return out;

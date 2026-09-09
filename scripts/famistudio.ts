@@ -97,24 +97,102 @@ function envelopeKind(type: string | undefined, relative: string | undefined): E
   return null;
 }
 
-function channelKind(
-  type: string | undefined
-): { kind: ChannelKind; octaveOffset: number; volumeScale: number; dutyType: number } | null {
+class ChannelInfo {
+  kind: ChannelKind;
+  octaveOffset: number;
+  dutyType: number;
+  volumeScale: number[] | number;
+  hash: string;
+
+  constructor(
+    kind: ChannelKind,
+    octaveOffset: number,
+    dutyType: number,
+    volumeScale: number[] | number
+  ) {
+    this.kind = kind;
+    this.octaveOffset = octaveOffset;
+    this.dutyType = dutyType;
+    this.volumeScale = volumeScale;
+    this.hash = JSON.stringify([
+      this.kind,
+      this.octaveOffset,
+      this.dutyType,
+      this.volumeScale
+    ]);
+  }
+
+  initialVolume() {
+    return this.volume(15, 'Quarter');
+  }
+
+  volume(i: number, volumeMapping: string) {
+    switch (volumeMapping) {
+      case 'Quarter': break; // do nothing
+      case 'Half': i = Math.floor(i * 31 / 15); break;
+      case 'Full': i = Math.floor(i * 63 / 15); break;
+      default: throw new Error(`Invalid volume mapping: ${volumeMapping}`);
+    }
+    const clamp = (num: number) =>
+      Math.max(0, Math.min(255, Math.floor(num * 256))); // TODO: pick the right scale
+    if (typeof this.volumeScale === 'number') {
+      return clamp(i * this.volumeScale);
+    } else {
+      if (i < 0 || i >= this.volumeScale.length) {
+        throw new Error(`Outside volume scale: ${i}`);
+      }
+      return clamp(this.volumeScale[i]);
+    }
+  }
+}
+
+// for each channel type, a FamiStudio test song was exported that plays the same sustained note at
+// volumes 0..15 -- the values below are linear gain factors:
+//
+//   gain[v] = famistudioRms[v] / referenceWaveRms
+//
+// famistudioRms[v] - steady-state RMS at each volume, excluding note-start/end transients
+// referenceWaveRms - RMS of the wave table oscillators
+const chSQA = new ChannelInfo(
+  ChannelKindSquare, 1, 1, [
+  0, 0.018338, 0.036240, 0.053715, 0.070779, 0.087445, 0.103731, 0.119647,
+  0.135207, 0.150420, 0.165302, 0.179855, 0.194098, 0.208034, 0.221679, 0.235040
+]);
+const chSQV = new ChannelInfo(ChannelKindSquare, 1, 2, 0.0178415);
+const chTRI = new ChannelInfo(
+  ChannelKindTriangle, 0, 0, [
+  0, 0.38903, 0.38903, 0.38903, 0.38903, 0.38903, 0.38903, 0.38903,
+  0.38903, 0.38903, 0.38903, 0.38903, 0.38903, 0.38903, 0.38903, 0.38903
+]);
+const chNOI = new ChannelInfo(
+  ChannelKindNoise, 0, 0, [
+  0, 0.004444, 0.008832, 0.013124, 0.017366, 0.021586, 0.025794, 0.029954,
+  0.033954, 0.037931, 0.041828, 0.045823, 0.049695, 0.053626, 0.057171, 0.060915
+]);
+const chPCM = new ChannelInfo(
+  ChannelKindPCM, 0, 0, [
+  0, 10, 20, 30, 40, 50, 60, 70,
+  80, 90, 100, 110, 120, 130, 140, 150
+]);
+const chSAW = new ChannelInfo(ChannelKindSaw, 1, 0, 0.014365);
+const chWAV = new ChannelInfo(ChannelKindWave, 1, 0, 0.10537);
+
+function famiChannelInfo(type: string | undefined): ChannelInfo | null {
   switch (type) {
     case 'Square1':
     case 'Square2':
-      return { kind: ChannelKindSquare, octaveOffset: 1, volumeScale: 68, dutyType: 1 };
+      return chSQA;
     case 'VRC6Square1':
     case 'VRC6Square2':
-      return { kind: ChannelKindSquare, octaveOffset: 1, volumeScale: 127, dutyType: 2 };
+      return chSQV;
     case 'Triangle':
-      return { kind: ChannelKindTriangle, octaveOffset: 0, volumeScale: -58, dutyType: 0 };
+      return chTRI;
     case 'Noise':
-      return { kind: ChannelKindNoise, octaveOffset: 0, volumeScale: 44, dutyType: 0 };
+      return chNOI;
     case 'DPCM':
-      return { kind: ChannelKindPCM, octaveOffset: 0, volumeScale: 255, dutyType: 0 };
+      return chPCM;
     case 'VRC6Saw':
-      return { kind: ChannelKindSaw, octaveOffset: 1, volumeScale: 116, dutyType: 0 };
+      return chSAW;
     case 'N163Wave1':
     case 'N163Wave2':
     case 'N163Wave3':
@@ -123,7 +201,7 @@ function channelKind(
     case 'N163Wave6':
     case 'N163Wave7':
     case 'N163Wave8':
-      return { kind: ChannelKindWave, octaveOffset: 1, volumeScale: 112, dutyType: 0 };
+      return chWAV;
   }
   return null;
 }
@@ -148,25 +226,45 @@ function parseNote(note: string | undefined, octaveOffset: number): number {
 const EV_NOTE   = 0x0000;
 const EV_WAIT   = 0x8000;
 const EV_PATEND = 0x8100;
+const EV_NOINST = 0x8101;
 const EV_INST1  = 0x8200;
 const EV_INST2  = 0x8300;
 const EV_VOL    = 0x8400;
 
+interface PatternEvent {
+  frame: number;
+  bias: number;
+  wait?: number;
+  value: number[];
+}
+
 class Events {
   length: number;
-  volumeScale: number;
+  channelInfo: ChannelInfo;
+  volumeMapping: string;
+  lastVolume: number;
   initialEventsSize: number;
-  events: { frame: number; bias: number; wait?: number; value: number[] }[];
+  events: PatternEvent[];
 
-  constructor(length: number, volumeScale: number) {
+  constructor(length: number, channelInfo: ChannelInfo) {
     this.length = length;
-    this.volumeScale = Math.abs(volumeScale);
-    this.events = [{
-      frame: length,
+    this.channelInfo = channelInfo;
+    this.volumeMapping = 'Quarter';
+    this.lastVolume = 15;
+    this.events = [];
+    this.push({
+      frame: length - 1,
       bias: 9999,
       value: [EV_PATEND]
-    }];
+    });
     this.initialEventsSize = this.events.length;
+  }
+
+  push(ev: PatternEvent) {
+    if (!Number.isInteger(ev.frame) || ev.frame < 0 || ev.frame >= this.length) {
+      throw new Error('Invalid frame');
+    }
+    this.events.push(ev);
   }
 
   note(
@@ -186,7 +284,7 @@ class Events {
       throw new Error('Invalid release');
     }
     release = Math.min(duration, release);
-    this.events.push({
+    this.push({
       frame,
       bias: 999,
       wait: duration,
@@ -199,34 +297,36 @@ class Events {
     });
   }
 
+  setVolumeMapping(frame: number, volumeMapping: string) {
+    if (this.volumeMapping !== volumeMapping) {
+      this.volumeMapping = volumeMapping;
+      this.volume(frame, this.lastVolume);
+    }
+  }
+
   instrument(frame: number, instrument: number) {
-    if (!Number.isInteger(instrument) || instrument < 0) {
+    if (!Number.isInteger(instrument)) {
       throw new Error('Invalid instrument index');
     }
-    if (instrument < 256) {
-      this.events.push({
-        frame,
-        bias: 0,
-        value: [EV_INST1 | instrument]
-      });
+    if (instrument < 0) {
+      this.push({ frame, bias: 0, value: [EV_NOINST] });
+    } else if (instrument < 256) {
+      this.push({ frame, bias: 0, value: [EV_INST1 | instrument] });
     } else if (instrument < 512) {
-      this.events.push({
-        frame,
-        bias: 0,
-        value: [EV_INST2 | (instrument - 256)]
-      });
+      this.push({ frame, bias: 0, value: [EV_INST2 | (instrument - 256)] });
     } else {
       console.error('Too many instruments; max of 512');
       process.exit(1);
     }
   }
 
-  volume(frame: number, volume: number, maxVolume: number) {
-    if (!Number.isInteger(volume) || volume < 0 || volume > maxVolume) {
-      throw new Error(`Unexpected volume ${volume} (expecting 0-${maxVolume})`);
+  volume(frame: number, volume: number) {
+    if (!Number.isInteger(volume) || volume < 0 || volume > 15) {
+      throw new Error(`Unexpected volume ${volume} (expecting 0-15)`);
     }
-    volume = Math.floor(volume * this.volumeScale / maxVolume);
-    this.events.push({
+    this.lastVolume = volume;
+    volume = this.channelInfo.volume(volume, this.volumeMapping);
+    this.push({
       frame,
       bias: 1,
       value: [EV_VOL | volume]
@@ -448,39 +548,35 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
   const instrumentNameToIndex = new Map<string, number>();
   function findInstrument(
     name: string,
-    channelKind: ChannelKind,
-    volumeScale: number,
-    dutyType: number
-  ) {
+    channelInfo: ChannelInfo
+  ): { index: number; volumeMapping: string } | null {
     if (name === '') return null;
     // parse envelope-based instruments
     const instrument = instrumentByName.get(name);
     if (!instrument) {
       throw new Error(`Missing instrument: ${name}`);
     }
-    const volumeMapping = channelKind === ChannelKindSaw
+    const volumeMapping = channelInfo.kind === ChannelKindSaw
       ? instrument.attributes.get('Vrc6SawMasterVolume') ?? 'Full'
-      : 'Full';
+      : 'Quarter';
 
     // TODO: convert N163Wave presets to regular instruments if possible
     // Sine, Triangle, Sawtooth, Square50%, Square25%
     // allows for triangle with volume! :)
 
     // check cache first
-    const key1 = `${name}\0${volumeMapping}\0${volumeScale}`;
-    const idx1 = instrumentNameToIndex.get(key1);
-    if (typeof idx1 === 'number') return idx1;
-    const key2 = `${name}\0@`;
-    const idx2 = instrumentNameToIndex.get(key2);
-    if (typeof idx2 === 'number') return idx2;
+    const key = `${name}\0${channelInfo.hash}`;
+    const cacheIndex = instrumentNameToIndex.get(key);
+    if (typeof cacheIndex === 'number') {
+      return { index: cacheIndex, volumeMapping };
+    }
 
     const envelopes = instrument.children.filter(c => c.name === 'Envelope');
     if (envelopes.length <= 0) {
-      return -1;
+      return { index: -1, volumeMapping };
     }
 
     const envs: Envelope[] = [];
-    let hasVolume = false;
     for (const envelope of envelopes) {
       const attr = envelope.attributes;
       const kind = envelopeKind(attr.get('Type'), attr.get('Relative'));
@@ -488,26 +584,18 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
         console.error(envelope);
         throw new Error('Invalid envelope');
       }
-      if (kind === EnvelopeKindDutyCycle && dutyType === 0) continue;
+      if (kind === EnvelopeKindDutyCycle && channelInfo.dutyType === 0) continue;
       const loop = parseFloat(attr.get('Loop') ?? '');
       const release = parseFloat(attr.get('Release') ?? '');
       let values = (attr.get('Values')?.split(',') || []).map(parseFloat);
       if (values.length > 0) {
         if (kind === EnvelopeKindVolume) {
-          hasVolume = true;
-          // rescale volume according to volumeMapping and volumeScale
-          values = values.map(v => {
-            if (volumeScale < 0) {
-              // NES Triangle uses volume envelope as a gate
-              return v > 0 ? -volumeScale : 0;
-            }
-            const m = ({ Full: 63, Half: 31, Quarter: 15 })[volumeMapping];
-            if (typeof m !== 'number') {
-              throw new Error(`Invalid volume mapping: ${volumeMapping}`);
-            }
-            return Math.floor((v / 15) * (m / 63) * volumeScale);
-          });
-        } else if (kind === EnvelopeKindDutyCycle && dutyType === 1) {
+          values = values.map(
+            v => channelInfo.kind === ChannelKindTriangle
+              ? (v > 0 ? 255 : 0)
+              : Math.floor(v * 255 / 15)
+          );
+        } else if (kind === EnvelopeKindDutyCycle && channelInfo.dutyType === 1) {
           // convert NES-style duty to VRC6-style duty
           values = values.map(v => {
             switch (v) {
@@ -530,18 +618,17 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
     //const dpcmMapping = instrument.children.filter(c => c.name === 'DPCMMapping');
     // TODO: do something with dpcmMapping
 
-    const key = hasVolume ? `${name}\0${volumeMapping}\0${volumeScale}` : `${name}\0@`;
-    const idx = out.instruments.length;
-    instrumentNameToIndex.set(key, idx);
+    const index = out.instruments.length;
+    instrumentNameToIndex.set(key, index);
     out.instruments.push({ envelopes: envs });
-    return idx;
+    return { index, volumeMapping };
   }
 
   // parse songs
   const songs = project.children.filter(c => c.name === 'Song');
   for (const song of songs) {
     const songLength = parseFloat(song.attributes.get('Length') ?? '');
-    const songLoop = parseFloat(song.attributes.get('LoopPoint') ?? '0');
+    const songLoop = Math.max(0, parseFloat(song.attributes.get('LoopPoint') ?? '0'));
     const patternLength = parseFloat(song.attributes.get('PatternLength') ?? '');
     const noteLength = parseFloat(song.attributes.get('NoteLength') ?? '');
     if (isNaN(songLength) || isNaN(patternLength) || isNaN(noteLength)) {
@@ -550,12 +637,11 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
     const chans: Channel[] = [];
     const channels = song.children.filter(c => c.name === 'Channel');
     for (const channel of channels) {
-      const chanKind = channelKind(channel.attributes.get('Type'));
-      if (!chanKind) {
+      const channelInfo = famiChannelInfo(channel.attributes.get('Type'));
+      if (!channelInfo) {
         console.error('Invalid channel:', channel);
         process.exit(1);
       }
-      const { kind, octaveOffset, volumeScale, dutyType } = chanKind;
 
       const patts: Pattern[] = [];
       const patterns = channel.children.filter(c => c.name === 'Pattern');
@@ -565,7 +651,7 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
         if (!patternName) {
           throw new Error('Missing pattern name');
         }
-        const events = new Events(patternLength * noteLength, volumeScale);
+        const events = new Events(patternLength * noteLength, channelInfo);
 
         let lastInstrument = -1;
         const notes = pattern.children.filter(c => c.name === 'Note');
@@ -587,23 +673,19 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
 
           const volume = parseFloat(getAttr('Volume'));
           if (!isNaN(volume)) {
-            events.volume(frame, volume, 15);
+            events.volume(frame, volume);
           }
 
-          const thisInstrument = findInstrument(
-            getAttr('Instrument'),
-            kind,
-            volumeScale,
-            dutyType
-          );
-          if (typeof thisInstrument === 'number') {
-            if (thisInstrument !== lastInstrument) {
-              events.instrument(frame, thisInstrument);
-              lastInstrument = thisInstrument;
+          const thisInstrument = findInstrument(getAttr('Instrument'), channelInfo);
+          if (thisInstrument) {
+            events.setVolumeMapping(frame, thisInstrument.volumeMapping);
+            if (thisInstrument.index !== lastInstrument) {
+              events.instrument(frame, thisInstrument.index);
+              lastInstrument = thisInstrument.index;
             }
           }
 
-          const noteVal = parseNote(getAttr('Value'), octaveOffset);
+          const noteVal = parseNote(getAttr('Value'), channelInfo.octaveOffset);
           if (noteVal >= 0) {
             const duration = parseFloat(getAttr('Duration'));
             if (isNaN(duration)) {
@@ -614,6 +696,9 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
               release = duration;
             }
             const attack = getAttr('Attack') !== 'False';
+            // TODO: famistudio can report Attack=False but not honor it if the channels/envelopes
+            // are too different... need to mimic that logic here:
+            // https://github.com/BleuBleu/FamiStudio/blob/70625dd09d8acaef831bbce468d416fb0b596be1/FamiStudio/Source/Project/Channel.cs#L1478
             events.note(frame, noteVal, duration, release, attack);
             // TODO: arpeggio
             // TODO: slide note
@@ -648,8 +733,8 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
 
       if (insts.some(i => i >= 0)) {
         chans.push({
-          kind,
-          initialVolume: volumeScale,
+          kind: channelInfo.kind,
+          initialVolume: channelInfo.initialVolume(),
           patterns: patts,
           instances: insts,
         });
@@ -665,7 +750,7 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
       }
       // empty column!
       if (emptyPatternIndex < 0) {
-        const ev = new Events(patternLength * noteLength, 255);
+        const ev = new Events(patternLength * noteLength, chTRI);
         const events = ev.done(true);
         if (!events) {
           throw new Error('Empty events failed to generate');
@@ -732,6 +817,9 @@ function serializeOut(out: OutputFile): number[] {
     align32();
     instRewrite.shift()?.(bytes.length);
     const instrumentStart = bytes.length;
+    if (instrument.envelopes.length >= 8) {
+      throw new Error('Too many envelopes');
+    }
     write8(instrument.envelopes.length);
     write8(0); // reserved
     write8(0); // reserved

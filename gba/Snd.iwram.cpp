@@ -14,7 +14,7 @@ static const int8_t adpcmIndex[] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1,
 void sndRenderAdpcmSet(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *state,
   uint8_t *&data
 ) {
@@ -55,7 +55,7 @@ void sndRenderAdpcmSet(
 void sndRenderAdpcmAdd(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *state,
   uint8_t *&data
 ) {
@@ -96,7 +96,7 @@ void sndRenderAdpcmAdd(
 void sndRenderWaveTableSet1024(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *phase,
   uint32_t dphase,
   const int16_t *waveTable
@@ -120,7 +120,7 @@ void sndRenderWaveTableSet1024(
 void sndRenderWaveTableAdd1024(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *phase,
   uint32_t dphase,
   const int16_t *waveTable
@@ -144,7 +144,7 @@ void sndRenderWaveTableAdd1024(
 void sndRenderWaveTableSet512(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *phase,
   uint32_t dphase,
   const int16_t *waveTable
@@ -168,7 +168,7 @@ void sndRenderWaveTableSet512(
 void sndRenderWaveTableAdd512(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *phase,
   uint32_t dphase,
   const int16_t *waveTable
@@ -192,7 +192,7 @@ void sndRenderWaveTableAdd512(
 void sndRenderWaveTableSet256(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *phase,
   uint32_t dphase,
   const int16_t *waveTable
@@ -216,7 +216,7 @@ void sndRenderWaveTableSet256(
 void sndRenderWaveTableAdd256(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *phase,
   uint32_t dphase,
   const int16_t *waveTable
@@ -240,7 +240,7 @@ void sndRenderWaveTableAdd256(
 void sndRenderWaveTableSet128(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *phase,
   uint32_t dphase,
   const int16_t *waveTable
@@ -264,7 +264,7 @@ void sndRenderWaveTableSet128(
 void sndRenderWaveTableAdd128(
   int16_t *out,
   uint32_t samples,
-  uint32_t volume,
+  int volume,
   uint32_t *phase,
   uint32_t dphase,
   const int16_t *waveTable
@@ -284,3 +284,75 @@ void sndRenderWaveTableAdd128(
   }
   *phase = p;
 }
+
+#ifdef PLATFORM_HOST
+extern "C" void sndRenderNoiseSet(
+  int16_t *out,
+  uint32_t samples,
+  int volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  uint32_t *state
+) {
+  uint32_t p = *phase;
+  uint32_t s = *state;
+  // this PRNG may look complex, but the assembly version is only two instructions, so very fast
+  // to implement on the GBA
+  #define STEP()  do {                            \
+      const uint32_t old = p;                     \
+      p += dphase;                                \
+      if (p < old) {                              \
+        s = (s >> 1) ^ (-(s & 1) & 0x80200003u);  \
+      }                                           \
+    } while (0)
+  while (samples > 0) {
+    out[0] = (volume * (((int32_t)s) >> 16)) >> 8; // SET
+    STEP();
+    out[1] = (volume * (((int32_t)s) >> 16)) >> 8;
+    STEP();
+    out[2] = (volume * (((int32_t)s) >> 16)) >> 8;
+    STEP();
+    out[3] = (volume * (((int32_t)s) >> 16)) >> 8;
+    STEP();
+    samples -= 4;
+    out += 4;
+  }
+  #undef STEP
+  *phase = p;
+  *state = s;
+}
+
+extern "C" void sndRenderNoiseAdd(
+  int16_t *out,
+  uint32_t samples,
+  int volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  uint32_t *state
+) {
+  uint32_t p = *phase;
+  uint32_t s = *state;
+  #define STEP()  do {                            \
+      const uint32_t old = p;                     \
+      p += dphase;                                \
+      if (p < old) {                              \
+        s = (s >> 1) ^ (-(s & 1) & 0x80200003u);  \
+      }                                           \
+    } while (0)
+  while (samples > 0) {
+    out[0] += (volume * (((int32_t)s) >> 16)) >> 8; // ADD
+    STEP();
+    out[1] += (volume * (((int32_t)s) >> 16)) >> 8;
+    STEP();
+    out[2] += (volume * (((int32_t)s) >> 16)) >> 8;
+    STEP();
+    out[3] += (volume * (((int32_t)s) >> 16)) >> 8;
+    STEP();
+    samples -= 4;
+    out += 4;
+  }
+  #undef STEP
+  *phase = p;
+  *state = s;
+}
+#endif
