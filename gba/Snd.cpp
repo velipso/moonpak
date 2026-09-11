@@ -2,6 +2,7 @@
 #include "Snd.hpp"
 #include "Snd.iwram.hpp"
 #include "SndData.hpp"
+#include "data/dpcm/DpcmTable.hpp"
 #include <stdlib.h>
 
 #ifdef TESTS
@@ -215,7 +216,7 @@ struct SndChannel {
     } else if (kind == 4) {
       // TODO: Wave
     } else if (kind == 5) {
-      // TODO: PCM
+      // PCM rendering is handled in the song, so skip in here
     } else if (kind == 6) {
       int dphase = SndData::dphasePerNoisePitch[(noteValue + 1) & 15];
       if (first) {
@@ -225,11 +226,14 @@ struct SndChannel {
       }
       first = false;
     }
+    return first;
+  }
 
+  void advance() {
     duration--;
     if (duration <= 0) {
       state = 0; // note stop
-      return first;
+      return;
     } else if (release > 0) {
       release--;
       if (release <= 0) {
@@ -262,8 +266,6 @@ struct SndChannel {
       }
       env[i].cursorIndex = (cursor << 3) | index;
     }
-
-    return first;
   }
 };
 
@@ -272,8 +274,17 @@ struct SndSong {
   const FamiSong &song;
   int column;
   SndChannel channels[16];
+  struct {
+    int16_t ch;
+    uint16_t blockSize;
+    const uint8_t *blockData;
+    uint32_t samplesLeft;
+    uint32_t blockLeft;
+    uint32_t state;
+  } pcm;
 
   SndSong(const FamiHeader &fami, const FamiSong &song) : fami(fami), song(song) {
+    pcm.ch = -1;
     loadColumn(0);
   }
 
@@ -308,6 +319,88 @@ struct SndSong {
     }
   }
 
+  void playPCM(int ch, int index) {
+    const DpcmTable::Entry &entry = DpcmTable::entries[index];
+    const uint8_t *data = entry.sample;
+    const uint8_t *dataEnd = &data[entry.size];
+    // parse the WAV file
+    data += 12; // skip RIFF + file size + WAVE
+    int flags = 0;
+    while (data < dataEnd && flags != 7) {
+      uint32_t chunkName = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+      data += 4;
+      uint32_t chunkSize = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+      data += 4;
+      if (chunkName == 0x20746d66) { // "fmt "
+        int align = data[12] | (data[13] << 8);
+        pcm.blockSize = (align - 4) << 1;
+        flags |= 1;
+      } else if (chunkName == 0x74636166) { // "fact"
+        pcm.samplesLeft = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
+        flags |= 2;
+      } else if (chunkName == 0x61746164) { // "data"
+        pcm.blockData = data;
+        pcm.blockLeft = 0;
+        flags |= 4;
+      }
+      data += chunkSize;
+    }
+    if (flags == 7) {
+      // found all necessary data, activate the PCM file
+      pcm.ch = ch;
+    }
+  }
+
+  void renderPCM(int16_t *out, int samples, bool first) {
+    constexpr int volume = 73;
+    int renderLeft = samples < pcm.samplesLeft ? samples : pcm.samplesLeft;
+    pcm.samplesLeft -= renderLeft;
+    if (first) {
+      int zeroLeft = samples - renderLeft;
+      while (renderLeft > 0) {
+        if (pcm.blockLeft == 0) {
+          // next block
+          pcm.state = sndAdpcmStateFromHeader(pcm.blockData);
+          pcm.blockData += 4;
+          pcm.blockLeft = pcm.blockSize;
+          int16_t s = sndAdpcmFirstSample(pcm.state);
+          *out++ = (s * volume) >> 8; // SET
+          renderLeft--;
+        } else {
+          int amount = pcm.blockLeft < renderLeft ? pcm.blockLeft : renderLeft;
+          sndRenderAdpcmSet(out, amount, volume, &pcm.state, &pcm.blockData);
+          // sndRenderAdpcm will advance state and blockData
+          out += amount;
+          pcm.blockLeft -= amount;
+          renderLeft -= amount;
+        }
+      }
+      while (zeroLeft > 0) {
+        *out++ = 0;
+        zeroLeft--;
+      }
+    } else {
+      while (renderLeft > 0) {
+        if (pcm.blockLeft == 0) {
+          // next block
+          pcm.state = sndAdpcmStateFromHeader(pcm.blockData);
+          pcm.blockData += 4;
+          pcm.blockLeft = pcm.blockSize;
+          int16_t s = sndAdpcmFirstSample(pcm.state);
+          *out++ += (s * volume) >> 8; // ADD
+          renderLeft--;
+        } else {
+          int amount = pcm.blockLeft < renderLeft ? pcm.blockLeft : renderLeft;
+          sndRenderAdpcmAdd(out, amount, volume, &pcm.state, &pcm.blockData);
+          // sndRenderAdpcm will advance state and blockData
+          out += amount;
+          pcm.blockLeft -= amount;
+          renderLeft -= amount;
+        }
+      }
+    }
+  }
+
   void tick(int16_t *out, int samples) {
     bool patternEnd = false;
     for (int ch = 0; ch < 16; ch++) {
@@ -323,13 +416,23 @@ struct SndSong {
           // double-payload
           uint16_t e2 = *channel.events++;
           int note = ev >> 8;
-          int release = (ev & 0xff) | ((e2 >> 3) & 0x700);
+          bool autowait = (ev & 0x0080) != 0;
           int duration = e2 & 0x7ff;
-          bool attack = (e2 & 0x8000) != 0;
-          bool autowait = (e2 & 0x4000) != 0;
-          channel.note(note, release, duration, attack);
-          //log("[%d] NOTE %d/%d/%d %s%s\n",
-          //  ch, note, release, duration, attack ? "A" : "x", autowait ? "W" : "x");
+          if (note < 0x6c) { // regular note
+            // 0NNNNNNNWALLLLLL
+            // HHHHHDDDDDDDDDDD
+            // regular note
+            bool attack = (ev & 0x0040) != 0;
+            int release = (ev & 0x3f) | ((e2 >> 5) & 0x7c0);
+            channel.note(note, release, duration, attack);
+            //log("[%d] NOTE %d/%d/%d %s%s\n",
+            //  ch, note, release, duration, attack ? "A" : "x", autowait ? "W" : "x");
+          } else if (note == 0x6c) { // PCM
+            // 0NNNNNNNWIIIIIII
+            // IIIIIDDDDDDDDDDD
+            channel.note(0, duration, duration, true);
+            playPCM(ch, (ev & 0x7f) | ((e2 >> 4) & 0xf80));
+          }
           if (autowait && duration > 0) {
             channel.wait += duration;
             goto next_channel;
@@ -347,6 +450,8 @@ struct SndSong {
                 goto next_channel;
               } else if (param == 1) { // NOINST
                 channel.famiInstrument(nullptr);
+              } else if (param == 2) { // STOP
+                channel.state = 0;
               }
               break;
             case 0x02: { // INST1
@@ -371,7 +476,20 @@ next_channel:;
     for (int ch = 0; ch < 16; ch++) {
       SndChannel &channel = channels[ch];
       if (!channel.isEnabled()) continue;
-      first = channel.render(out, samples, first);
+      if (ch == pcm.ch) {
+        // render PCM channel
+        if (!channel.state || pcm.samplesLeft <= 0) {
+          // note ended or PCM sample ended
+          channel.state = 0;
+          pcm.ch = -1;
+          continue;
+        }
+        renderPCM(out, samples, first);
+        first = false;
+      } else {
+        first = channel.render(out, samples, first);
+      }
+      channel.advance();
     }
     if (first) {
       for (int i = 0; i < samples; i++) {
@@ -455,7 +573,7 @@ int Snd::test(bool verbose) {
 
   int songIndex = 0;
 
-  const uint8_t *fami = dataSongsOutro;
+  const uint8_t *fami = dataSongsBasic; // Outro Basic
   const FamiHeader &header = *(const FamiHeader *)fami;
 
   int songsOffset = header.songsOffset;
@@ -473,84 +591,6 @@ int Snd::test(bool verbose) {
   }
 
   writeWAV("temp/sndout.wav", g_out, g_outSize);
-
-/*
-  example WAV parsing with IMA ADPCM compression
-
-  ffmpeg -i input.wav \
-    -ac 1 \
-    -ar 32768 \
-    -c:a adpcm_ima_wav \
-    -map_metadata -1 \
-    -fflags +bitexact \
-    output.wav
-
-  FILE *fp = fopen("temp/accept.ima.wav", "rb");
-  if (!fp) {
-    log("failed to open\n");
-    return 1;
-  }
-  fseek(fp, 0, SEEK_END);
-  long size = ftell(fp);
-  fseek(fp, 0, SEEK_SET);
-  uint8_t *data = (uint8_t *)calloc(size, 1);
-  uint8_t *dataEnd = &data[size];
-  fread(data, 1, size, fp);
-  fclose(fp);
-
-  data += 4; // skip RIFF
-  uint32_t fileSize = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
-  data += 8; // fileSize + WAVE
-  uint16_t align;
-  uint32_t sampleCount;
-  while (data < dataEnd) {
-    uint32_t chunkName = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
-    data += 4;
-    uint32_t chunkSize = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
-    data += 4;
-    printf("%04x %c%c%c%c %d\n", chunkName, chunkName & 0xff, (chunkName >> 8) & 0xff,
-      (chunkName >> 16) & 0xff, (chunkName >> 24) & 0xff, chunkSize);
-    if (chunkName == 0x20746d66) { // "fmt "
-      uint16_t comp = data[0] | (data[1] << 8);
-      uint16_t channels = data[2] | (data[3] << 8);
-      uint32_t rate = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
-      uint32_t bps = data[8] | (data[9] << 8) | (data[10] << 16) | (data[11] << 24);
-      align = data[12] | (data[13] << 8);
-      uint16_t bitps = data[14] | (data[15] << 8);
-      uint16_t ext = data[16] | (data[17] << 8);
-      printf("comp %02X channels %d rate %d\n", comp, channels, rate);
-      printf("bps %d align %d bitps %d ext %d\n", bps, align, bitps, ext);
-    } else if (chunkName == 0x74636166) { // "fact"
-      sampleCount = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24);
-      printf("sampleCount? %d\n", sampleCount);
-    } else if (chunkName == 0x61746164) { // "data"
-      uint8_t *blockData = data;
-      int16_t *output = (int16_t *)calloc(sampleCount, sizeof(int16_t));
-      int16_t *outputPtr = output;
-      int sampleLeft = sampleCount;
-      while (sampleLeft > 0) {
-        int state = sndAdpcmStateFromHeader(blockData);
-        blockData += 4;
-        *outputPtr++ = sndAdpcmFirstSample(state);
-        sampleLeft--;
-        if (sampleLeft <= 0) break;
-        int outputCount = (align - 4) << 1;
-        if (outputCount > sampleLeft) outputCount = sampleLeft;
-        sndRenderAdpcmSet(outputPtr, outputCount, 256, state, blockData);
-        // sndRenderAdpcmSet will advance blockData
-        sampleLeft -= outputCount;
-        outputPtr += outputCount;
-      }
-      fp = fopen("temp/accept.ima.raw", "wb");
-      if (fp) {
-        fwrite(output, sizeof(int16_t), sampleCount, fp);
-        fclose(fp);
-      }
-    }
-    data += chunkSize;
-  }
-*/
-
   return 0;
 }
 #endif

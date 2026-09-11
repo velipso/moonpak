@@ -5,10 +5,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 // @ts-expect-error -- intentionally no @types/node
 import { inspect } from 'node:util';
+// @ts-expect-error -- intentionally no @types/node
+import { spawn } from 'node:child_process';
 
 declare const process: {
   argv: string[];
   exit(code?: number): never;
+  stdout: any;
+};
+
+declare const Buffer: {
+  from(buffer: ArrayBufferLike, offset: number, length: number): unknown;
 };
 
 interface Chunk {
@@ -16,6 +23,11 @@ interface Chunk {
   attributes: Map<string, string>;
   children: Chunk[];
   depth: number;
+}
+
+interface DpcmTableEntry {
+  name: string;
+  rate: number;
 }
 
 const EnvelopeKindVolume    = 0 as const;
@@ -80,7 +92,7 @@ interface Song {
   channels: Channel[];
 }
 
-interface OutputFile {
+interface SongFile {
   instruments: Instrument[];
   songs: Song[];
 }
@@ -224,9 +236,11 @@ function parseNote(note: string | undefined, octaveOffset: number): number {
 }
 
 const EV_NOTE   = 0x0000;
+const EV_PCM    = 0x6c00;
 const EV_WAIT   = 0x8000;
 const EV_PATEND = 0x8100;
 const EV_NOINST = 0x8101;
+const EV_STOP   = 0x8102;
 const EV_INST1  = 0x8200;
 const EV_INST2  = 0x8300;
 const EV_VOL    = 0x8400;
@@ -236,6 +250,7 @@ interface PatternEvent {
   bias: number;
   wait?: number;
   value: number[];
+  index: number;
 }
 
 class Events {
@@ -260,11 +275,44 @@ class Events {
     this.initialEventsSize = this.events.length;
   }
 
-  push(ev: PatternEvent) {
+  push(ev: Omit<PatternEvent, 'index'>) {
     if (!Number.isInteger(ev.frame) || ev.frame < 0 || ev.frame >= this.length) {
       throw new Error('Invalid frame');
     }
-    this.events.push(ev);
+    this.events.push({ ...ev, index: this.events.length });
+  }
+
+  pcm(
+    frame: number,
+    index: number,
+    duration: number
+  ) {
+    if (!Number.isInteger(index) || index < 0 || index >= 4096) {
+      throw new Error('Invalid PCM index');
+    }
+    if (!Number.isInteger(duration) || duration < 0 || duration >= 2048) {
+      throw new Error('Invalid duration');
+    }
+    this.push({
+      frame,
+      bias: 999,
+      wait: duration,
+      // 0NNNNNNNWIIIIIII
+      // IIIIIDDDDDDDDDDD
+      // 0x80 = advance by duration (if possible)
+      value: [
+        EV_PCM | 0x0080 | (index & 0x7f),
+        (((index >> 7) & 0x1f) << 11) | duration
+      ]
+    });
+  }
+
+  stopNote(frame: number) {
+    this.push({
+      frame,
+      bias: 998,
+      value: [EV_STOP]
+    });
   }
 
   note(
@@ -288,11 +336,13 @@ class Events {
       frame,
       bias: 999,
       wait: duration,
-      // 0x8000 = attack exists
-      // 0x4000 = advance by duration (if possible)
+      // 0NNNNNNNWALLLLLL
+      // HHHHHDDDDDDDDDDD
+      // 0x80 = advance by duration (if possible)
+      // 0x40 = attack exists
       value: [
-        EV_NOTE | (note << 8) | (release & 0xff),
-        (attack ? 0x8000 : 0) | 0x4000 | (((release >> 8) & 0x7) << 11) | duration
+        EV_NOTE | (note << 8) | 0x0080 | (attack ? 0x0040 : 0) | (release & 0x3f),
+        (((release >> 6) & 0x1f) << 11) | duration
       ]
     });
   }
@@ -344,21 +394,21 @@ class Events {
       if (v1 !== 0) return v1;
       const v2 = a.bias - b.bias;
       if (v2 !== 0) return v2;
-      return a.value[0] - b.value[0];
+      return a.index - b.index;
     });
 
     // remove automatic advancing by duration if events are in the way
     for (let i = 0; i < this.events.length; i++) {
       const e = this.events[i];
-      if ((e.value[0] & 0x8000) == EV_NOTE && 'wait' in e && typeof e.wait === 'number') {
-        // found note event... is the next event before duration?
+      if ((e.value[0] & 0x8000) == 0 && 'wait' in e && typeof e.wait === 'number') {
+        // found double-payload event... is the next event before duration?
         if (
           i < this.events.length - 1 &&
           this.events[i + 1].frame < e.frame + e.wait // next event is in the way?
         ) {
           // then we can't advance by duration :(
           delete e.wait;
-          e.value[1] &= 0xbfff; // remove 0x4000 flag
+          e.value[0] &= 0xff7f; // remove 0x0080 flag
         }
       }
     }
@@ -385,11 +435,33 @@ class Events {
 
 function printUsage(error?: string): never {
   console.log(
-    'Usage: node famistudio.ts -o <output.bin> <input.txt>\n\n' +
-    'Converts a FamiStudio text export (input.txt) into an event stream (output.bin)\n' +
-    'that can be used by the sound engine to play songs.\n\n' +
-    '-o <output.bin>  Output file\n\n' +
-    '<input.txt>      Input file from FamiStudio export'
+    'Usage: node famistudio.ts <cmd> [args...]\n\n' +
+    'Processes FamiStudio text exports to extract necessary data.\n\n' +
+    'Commands:\n\n' +
+    '* song -o <output.bin> -t <dpcm.json> <input.txt>\n\n' +
+    '  Converts FamiStudio text export <input.txt> to an event stream <output.bin>\n' +
+    '  that can be used by the sound engine to play songs.\n\n' +
+    '  -o <output.bin>  Output file\n' +
+    '  -t <dpcm.json>   Input DPCM table mapping (generated via `dpcm-table`)\n' +
+    '  <input.txt>      Input file from FamiStudio export\n\n' +
+    '* dpcm-table -d <dir> -t <dpcm.json> -x <exdir> -n <name> <input.txt>+\n\n' +
+    '  Scans all FamiStudio text files <input.txt>+ and DPCM samples in <dir>\n' +
+    '  and writes all required samples and pitch changes to <dpcm.json>, then\n' +
+    '  exports the resampled WAV files to the export directory <exdir>, and\n' +
+    '  generates the HPP/CPP files <exdir>/<name>.hpp and <exdir>/<name>.cpp.\n\n' +
+    '  -d <dir>         Input directory of DPCM .WAV files\n' +
+    '  -t <dpcm.json>   Output DPCM table mapping\n' +
+    '  -x <exdir>       Export directory for HPP/CPP/WAV files\n' +
+    '  -n <name>        Name of HPP/CPP files (default: DpcmTable)\n' +
+    '                   (output as: <exdir>/<name>.hpp and <exdir>/<name>.cpp)\n' +
+    '  <input.txt>+     All the input songs in the project\n\n' +
+    '* dpcm-export -d <dir> [-f] <input.txt>\n\n' +
+    '  Extracts DPCM samples from FamiStudio text export (input.txt) and writes\n' +
+    '  resulting .WAV files to directory <dir>.\n\n' +
+    '  -d <dir>         Output directory for DPCM .WAV files\n' +
+    '  -f               Overwrite files if they already exist\n' +
+    '                   (default: skip files if they already exist)\n' +
+    '  <input.txt>      Input file from FamiStudio export'
   );
   if (error) {
     console.error('\nError: %s', error);
@@ -397,17 +469,47 @@ function printUsage(error?: string): never {
   process.exit(error ? 1 : 0);
 }
 
-function parseArgs(): { inputFile: string; outputFile: string | null } {
+interface SongArgs {
+  inputFile: string;
+  dpcmTableFile: string;
+  outputFile: string | null;
+}
+
+interface DpcmTableArgs {
+  inputFiles: string[];
+  dpcmDir: string;
+  exportDir: string;
+  outputName: string;
+  dpcmTableFile: string | null;
+}
+
+interface DpcmExportArgs {
+  inputFile: string;
+  dpcmDir: string;
+  overwrite: boolean;
+}
+
+function parseArgs():
+  | ['song', SongArgs]
+  | ['dpcm-table', DpcmTableArgs]
+  | ['dpcm-export', DpcmExportArgs]
+{
   const args = process.argv.slice(2);
   if (args.length <= 0) {
     printUsage();
   }
 
+  const cmd = args.shift();
+  let dpcmDir: string | null = null;
+  let dpcmTableFile: string | null = null;
+  let exportDir: string | null = null;
+  let outputName: string | null = null;
   let outputFile: string | null = null;
-  let inputFile: string | null = null;
+  let inputFiles: string[] = [];
+  let overwrite = false;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '-o') {
+    if (cmd === 'song' && args[i] === '-o') {
       i++;
       if (i >= args.length) {
         printUsage('Missing output file after -o');
@@ -416,19 +518,79 @@ function parseArgs(): { inputFile: string; outputFile: string | null } {
         printUsage('Cannot specify multiple output files');
       }
       outputFile = args[i];
-    } else {
-      if (typeof inputFile === 'string') {
-        printUsage('Cannot specify multiple input files');
+    } else if ((cmd === 'song' || cmd === 'dpcm-table') && args[i] === '-t') {
+      i++;
+      if (i >= args.length) {
+        printUsage('Missing DPCM table file after -t');
       }
-      inputFile = args[i];
+      if (typeof dpcmTableFile === 'string') {
+        printUsage('Cannot specify multiple DPCM table files');
+      }
+      dpcmTableFile = args[i];
+    } else if ((cmd === 'dpcm-table' || cmd === 'dpcm-export') && args[i] === '-d') {
+      i++;
+      if (i >= args.length) {
+        printUsage('Missing DPCM directory after -d');
+      }
+      if (typeof dpcmDir === 'string') {
+        printUsage('Cannot specify multiple DPCM directories');
+      }
+      dpcmDir = args[i];
+    } else if (cmd === 'dpcm-table' && args[i] === '-x') {
+      i++;
+      if (i >= args.length) {
+        printUsage('Missing export directory after -x');
+      }
+      if (typeof exportDir === 'string') {
+        printUsage('Cannot specify multiple export directories');
+      }
+      exportDir = args[i];
+    } else if (cmd === 'dpcm-table' && args[i] === '-n') {
+      i++;
+      if (i >= args.length) {
+        printUsage('Missing output name after -n');
+      }
+      if (typeof outputName === 'string') {
+        printUsage('Cannot specify multiple output names');
+      }
+      outputName = args[i];
+    } else if (cmd === 'dpcm-export' && args[i] === '-f') {
+      overwrite = true;
+    } else {
+      inputFiles.push(args[i]);
     }
   }
 
-  if (inputFile === null) {
+  if (inputFiles.length <= 0) {
     printUsage('Missing input file');
   }
+  if ((cmd === 'song' || cmd === 'dpcm-export') && inputFiles.length > 1) {
+    printUsage("Can't specify more than one input file");
+  }
+  if ((cmd === 'dpcm-table' || cmd === 'dpcm-export') && dpcmDir === null) {
+    printUsage('Missing DPCM directory -d');
+  }
 
-  return { inputFile, outputFile };
+  if (cmd === 'song') {
+    if (!dpcmTableFile) {
+      printUsage('Missing DPCM table file -t');
+    }
+    return ['song', { inputFile: inputFiles[0], dpcmTableFile, outputFile }];
+  } else if (cmd === 'dpcm-table') {
+    if (dpcmDir === null) throw new Error('Bad dpcmDir');
+    if (exportDir === null) {
+      printUsage('Missing export directory -x');
+    }
+    if (outputName === null) {
+      outputName = 'DpcmTable';
+    }
+    return ['dpcm-table', { inputFiles, dpcmDir, exportDir, outputName, dpcmTableFile }];
+  } else if (cmd === 'dpcm-export') {
+    if (dpcmDir === null) throw new Error('Bad dpcmDir');
+    return ['dpcm-export', { inputFile: inputFiles[0], dpcmDir, overwrite }];
+  } else {
+    printUsage(`Invalid command: ${cmd}`);
+  }
 }
 
 function parseLine(line: string): { name: string; attributes: Map<string, string> } {
@@ -514,8 +676,12 @@ function parseFileIntoTree(fileData: string): Chunk[] {
   return root.children;
 }
 
-function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
-  const out: OutputFile = {
+function parseTreeIntoSong(
+  rootChildren: Chunk[],
+  dpcmTable: DpcmTableEntry[],
+  writeDpcmTable: boolean
+): SongFile {
+  const out: SongFile = {
     instruments: [],
     songs: [],
   };
@@ -615,8 +781,6 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
         });
       }
     }
-    //const dpcmMapping = instrument.children.filter(c => c.name === 'DPCMMapping');
-    // TODO: do something with dpcmMapping
 
     const index = out.instruments.length;
     instrumentNameToIndex.set(key, index);
@@ -624,10 +788,40 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
     return { index, volumeMapping };
   }
 
+  const instrumentPCMToMap = new Map<string, Map<string, DpcmTableEntry>>();
+  function findInstrumentPCM(name: string): Map<string, DpcmTableEntry> | null {
+    if (name === '') return null;
+
+    const cache = instrumentPCMToMap.get(name);
+    if (cache) return cache;
+
+    // parse DPCM-based instruments
+    const instrument = instrumentByName.get(name);
+    if (!instrument) {
+      throw new Error(`Missing instrument: ${name}`);
+    }
+    const result = new Map<string, DpcmTableEntry>();
+    const mappings = instrument.children.filter(c => c.name === 'DPCMMapping');
+    for (const mapping of mappings) {
+      const note = mapping.attributes.get('Note');
+      const name = dpcmName(mapping.attributes.get('Sample') ?? '');
+      const rate = parseFloat(mapping.attributes.get('Pitch') ?? '');
+      if (note && name && Number.isInteger(rate) && rate >= 0 && rate < 16) {
+        if (mapping.attributes.get('Loop') === 'True') {
+          console.error(`WARNING: Sound engine doesn't support DPCM looping samples: ${name}`);
+        }
+        result.set(note, { name, rate });
+      }
+    }
+    instrumentPCMToMap.set(name, result);
+    return result;
+  }
+
   // parse songs
   const songs = project.children.filter(c => c.name === 'Song');
   for (const song of songs) {
     const songLength = parseFloat(song.attributes.get('Length') ?? '');
+    // TODO: implement non-looping songs
     const songLoop = Math.max(0, parseFloat(song.attributes.get('LoopPoint') ?? '0'));
     const patternLength = parseFloat(song.attributes.get('PatternLength') ?? '');
     const noteLength = parseFloat(song.attributes.get('NoteLength') ?? '');
@@ -653,7 +847,7 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
         }
         const events = new Events(patternLength * noteLength, channelInfo);
 
-        let lastInstrument = -1;
+        let lastInstrument = -999;
         const notes = pattern.children.filter(c => c.name === 'Note');
         for (const note of notes) {
           const attr = [...note.attributes.entries()];
@@ -671,37 +865,65 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
             throw new Error('Invalid time field in pattern note');
           }
 
-          const volume = parseFloat(getAttr('Volume'));
-          if (!isNaN(volume)) {
-            events.volume(frame, volume);
-          }
+          const pcmInst = channelInfo.kind === ChannelKindPCM
+            ? findInstrumentPCM(getAttr('Instrument'))
+            : null;
 
-          const thisInstrument = findInstrument(getAttr('Instrument'), channelInfo);
-          if (thisInstrument) {
-            events.setVolumeMapping(frame, thisInstrument.volumeMapping);
-            if (thisInstrument.index !== lastInstrument) {
-              events.instrument(frame, thisInstrument.index);
-              lastInstrument = thisInstrument.index;
+          if (channelInfo.kind !== ChannelKindPCM) {
+            const volume = parseFloat(getAttr('Volume'));
+            if (!isNaN(volume)) {
+              events.volume(frame, volume);
+            }
+
+            const thisInstrument = findInstrument(getAttr('Instrument'), channelInfo);
+            if (thisInstrument) {
+              events.setVolumeMapping(frame, thisInstrument.volumeMapping);
+              if (thisInstrument.index !== lastInstrument) {
+                events.instrument(frame, thisInstrument.index);
+                lastInstrument = thisInstrument.index;
+              }
             }
           }
 
-          const noteVal = parseNote(getAttr('Value'), channelInfo.octaveOffset);
+          const noteStr = getAttr('Value');
+          const noteVal = parseNote(noteStr, channelInfo.octaveOffset);
           if (noteVal >= 0) {
             const duration = parseFloat(getAttr('Duration'));
             if (isNaN(duration)) {
               throw new Error('Note missing Duration');
             }
-            let release = parseFloat(getAttr('Release'));
-            if (isNaN(release)) {
-              release = duration;
+            if (channelInfo.kind === ChannelKindPCM) {
+              const e = pcmInst?.get(noteStr);
+              if (e) {
+                let index = dpcmTable.findIndex(d => d.name === e.name && d.rate === e.rate);
+                if (index < 0) {
+                  if (writeDpcmTable) {
+                    // note: this index will actually be wrong, because the dpcmTable will be
+                    // resorted later... but it doesn't matter, these events will be thrown out
+                    index = dpcmTable.length;
+                    dpcmTable.push(e);
+                  } else {
+                    console.error(`Missing DPCM sample: ${e.name} (${e.rate})`);
+                    process.exit(2);
+                  }
+                }
+                events.pcm(frame, index, duration);
+              }
+            } else {
+              let release = parseFloat(getAttr('Release'));
+              if (isNaN(release)) {
+                release = duration;
+              }
+              const attack = getAttr('Attack') !== 'False';
+              // TODO: famistudio can report Attack=False but not honor it if the channels/envelopes
+              // are too different... need to mimic that logic here:
+              // https://github.com/BleuBleu/FamiStudio/blob/70625dd09d8acaef831bbce468d416fb0b596be1/FamiStudio/Source/Project/Channel.cs#L1478
+              events.note(frame, noteVal, duration, release, attack);
+              // TODO: arpeggio
+              // TODO: slide note
             }
-            const attack = getAttr('Attack') !== 'False';
-            // TODO: famistudio can report Attack=False but not honor it if the channels/envelopes
-            // are too different... need to mimic that logic here:
-            // https://github.com/BleuBleu/FamiStudio/blob/70625dd09d8acaef831bbce468d416fb0b596be1/FamiStudio/Source/Project/Channel.cs#L1478
-            events.note(frame, noteVal, duration, release, attack);
-            // TODO: arpeggio
-            // TODO: slide note
+          } else if (noteStr === 'Stop') {
+            events.stopNote(frame);
           }
 
           // TODO: handle unknown attrs: if (attr.length > 0) console.log(attr);
@@ -771,7 +993,7 @@ function parseTreeIntoOut(rootChildren: Chunk[]): OutputFile {
   return out;
 }
 
-function serializeOut(out: OutputFile): number[] {
+function serializeSong(out: SongFile): number[] {
   // serialize to bytes
   const bytes: number[] = [0x66, 0x61, 0x6d, 0x69]; // "fami"
   const write8 = (v: number) => bytes.push(v & 0xff);
@@ -879,18 +1101,310 @@ function serializeOut(out: OutputFile): number[] {
   return bytes;
 }
 
-// main program
-const { inputFile, outputFile } = parseArgs();
-const tree = parseFileIntoTree(await fs.readFile(inputFile, 'utf8'));
-const out = parseTreeIntoOut(tree);
-const bytes = serializeOut(out);
-if (outputFile) {
-  await fs.writeFile(outputFile, new Uint8Array(bytes));
-} else {
-  for (let i = 0; i < bytes.length; i += 16) {
-    console.log(bytes.slice(i, i + 16).map(v => `0${v.toString(16)}`.substr(-2)).join(' '));
+function dpcmName(name: string) { // FamiStudio name -> internal name
+  return name.replace(/[^a-zA-Z_0-9]/g, '_');
+}
+
+async function getDpcmFiles(dpcmDir: string): Promise<string[]> {
+  const result: string[] = [];
+  const files = await fs.readdir(dpcmDir, { withFileTypes: true });
+  for (const file of files) {
+    if (file.isFile()) {
+      const m = file.name.match(/^(.*)\.wav/);
+      if (m) {
+        result.push(m[1]);
+      }
+    }
   }
-  console.log(bytes.length, 'bytes');
+  return result;
+}
+
+function decodeDpcm(level: number, data: number[]) {
+  const levels: number[] = [];
+  for (const byte of data) {
+    for (let bit = 0; bit < 8; bit++) {
+      if (byte & (1 << bit)) {
+        if (level < 63) level++;
+      } else {
+        if (level > 0) level--;
+      }
+      levels.push(level);
+    }
+  }
+
+  // trim trailing zeros, which hover around 32 due to DPCM weirdness
+  let lastPop;
+  while (levels.length > 0 && Math.abs(levels[levels.length - 1] - 32) <= 1) {
+    lastPop = levels.pop();
+  }
+  // ... except save the last one
+  if (typeof lastPop === 'number') {
+    levels.push(lastPop);
+  }
+
+  const pcm = new Uint8Array(levels.length);
+  for (let i = 0; i < levels.length; i++) {
+    const level = levels[i];
+    pcm[i] = (level << 2) | (level >> 4);
+  }
+  return pcm;
+}
+
+function writeWav(pcm: Uint8Array, filename: string) {
+  return new Promise<void>((resolve) => {
+    const proc = spawn('ffmpeg', [
+      '-loglevel', 'fatal',
+      '-f', 'u8',
+      '-ar', '33144', // DPCM 15 sample rate (1789773 / 54)
+      '-ac', '1',
+      '-i', 'pipe:0',
+      '-c:a', 'pcm_u8',
+      '-y',
+      filename,
+    ], {
+      stdio: ['pipe', 'inherit', 'inherit'],
+    });
+    proc.on('error', (err: unknown) => {
+      console.error(err);
+      process.exit(1);
+    });
+    proc.on('close', (code: number) => {
+      if (code !== 0) {
+        console.error(`ffmpeg failed (exit ${code})`);
+        process.exit(1);
+      }
+      resolve();
+    });
+    proc.stdin.end(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength));
+  });
+}
+
+async function ffprobeSampleRate(filename: string): Promise<number> {
+  return new Promise((resolve) => {
+    const proc = spawn('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=sample_rate',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filename,
+    ], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    let output = '';
+    proc.stdout.setEncoding('utf8');
+    proc.stdout.on('data', (data: string) => output += data);
+    proc.on('error', (err: unknown) => {
+      console.error(err);
+      process.exit(1);
+    });
+    proc.on('close', (code: number) => {
+      if (code !== 0) {
+        console.error(`ffprobe failed (exit ${code})`);
+        process.exit(1);
+      }
+      resolve(parseFloat(output.trim()));
+    });
+  });
+}
+
+function convertDpcmSampleBlock(
+  input: string,
+  output: string,
+  pitchedRate: number,
+  blockSize: number
+) {
+  return new Promise<void>((resolve) => {
+    const proc = spawn('ffmpeg', [
+      '-loglevel', 'fatal',
+      '-i', input,
+      '-af', `asetrate=${pitchedRate},aresample=32768`,
+      '-ac', '1',
+      '-c:a', 'adpcm_ima_wav',
+      '-block_size', `${blockSize}`,
+      '-ar', '32768',
+      '-y',
+      output,
+    ], {
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+    proc.on('error', (err: unknown) => {
+      console.error(err);
+      process.exit(1);
+    });
+    proc.on('close', (code: number) => {
+      if (code !== 0) {
+        console.error(`ffmpeg failed (exit ${code})`);
+        process.exit(code);
+      }
+      resolve();
+    });
+  });
+}
+
+async function convertDpcmSample(input: string, output: string, rate: number) {
+  const sourceRate = await ffprobeSampleRate(input);
+  // NES DPCM periods
+  const dpcmPeriods = [428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 85, 72, 54];
+  const pitchedRate = Math.round(sourceRate * dpcmPeriods[15] / dpcmPeriods[rate]);
+  let blockSize = 32;
+  let bestBlockSize = -1;
+  let bestSize = -1;
+  while (blockSize <= 1024) {
+    await convertDpcmSampleBlock(input, output, pitchedRate, blockSize);
+    const { size } = await fs.stat(output);
+    if (bestSize < 0 || size < bestSize) {
+      bestBlockSize = blockSize;
+      bestSize = size;
+    }
+    blockSize *= 2;
+  }
+  await convertDpcmSampleBlock(input, output, pitchedRate, bestBlockSize);
+}
+
+async function generateDpcmTableFiles(
+  dpcmDir: string,
+  exportDir: string,
+  outputName: string,
+  dpcmTable: DpcmTableEntry[]
+): Promise<{ hpp: string[]; cpp: string[] }> {
+  const hpp: string[] = [
+    `// generated by scripts/famistudio.ts dpcm-table`,
+    `#pragma once`,
+    `#include <stdint.h>`,
+    ``,
+    `namespace DpcmTable {`,
+    `  struct Entry {`,
+    `    const uint8_t *sample;`,
+    `    const uint32_t size;`,
+    `  };`,
+    ``,
+    `  extern const Entry entries[];`,
+    ``,
+  ];
+  const cpp: string[] = [
+    `// generated by scripts/famistudio.ts dpcm-table`,
+    `#include "${outputName}.hpp"`,
+    ``,
+    `namespace DpcmTable {`,
+  ];
+  const dpcmFiles = await getDpcmFiles(dpcmDir);
+  const entries: string[] = [];
+  for (const { name, rate } of dpcmTable) {
+    const file = dpcmFiles.find(d => d.toLowerCase() === name.toLowerCase());
+    const sourceFile = path.join(dpcmDir, `${file}.wav`);
+    if (file && await fs.access(sourceFile).then(() => true, () => false)) {
+      const wavName = `${name}_${rate}.wav`;
+      const targetFile = path.join(exportDir, wavName);
+      await convertDpcmSample(sourceFile, targetFile, rate)
+      const ident = `dpcm${name.charAt(0).toUpperCase()}${name.substr(1)}_${rate}`;
+      hpp.push(
+        `  alignas(4) extern const uint8_t ${ident}[];`,
+        `  extern const uint32_t ${ident}Size;`,
+      );
+      cpp.push(
+        `  alignas(4) const uint8_t ${ident}[] = {`,
+        `    #embed "${wavName}"`,
+        `  };`,
+        `  const uint32_t ${ident}Size = sizeof(${ident});`
+      );
+      entries.push(`    { ${ident}, sizeof(${ident}) },`);
+    } else {
+      console.error(`WAV missing: ${file ? sourceFile : `${dpcmDir}/${name}.wav`}`);
+      process.exit(1);
+    }
+  }
+  cpp.push(`  const Entry entries[] = {`);
+  for (const e of entries) {
+    cpp.push(e);
+  }
+  cpp.push(`    { nullptr, 0 },`);
+  cpp.push(`  };`);
+  hpp.push('}', '');
+  cpp.push('}', '');
+  return { hpp, cpp };
+}
+
+// main program
+const [cmd, args] = parseArgs();
+switch (cmd) {
+  case 'song': {
+    const { inputFile, dpcmTableFile, outputFile } = args;
+    const dpcmTable = JSON.parse(await fs.readFile(dpcmTableFile, 'utf8'));
+    const tree = parseFileIntoTree(await fs.readFile(inputFile, 'utf8'));
+    const song = parseTreeIntoSong(tree, dpcmTable, false);
+    const bytes = serializeSong(song);
+    if (outputFile) {
+      await fs.writeFile(outputFile, new Uint8Array(bytes));
+    } else {
+      for (let i = 0; i < bytes.length; i += 16) {
+        console.log(bytes.slice(i, i + 16).map(v => `0${v.toString(16)}`.substr(-2)).join(' '));
+      }
+      console.log(bytes.length, 'bytes');
+    }
+    break;
+  }
+  case 'dpcm-table': {
+    const { inputFiles, dpcmDir, exportDir, outputName, dpcmTableFile } = args;
+    const dpcmTable: DpcmTableEntry[] = [];
+    for (const inputFile of inputFiles) {
+      const tree = parseFileIntoTree(await fs.readFile(inputFile, 'utf8'));
+      parseTreeIntoSong(tree, dpcmTable, true);
+    }
+    dpcmTable.sort((a, b) => {
+      const v1 = a.name.localeCompare(b.name);
+      if (v1 !== 0) return v1;
+      return a.rate - b.rate;
+    });
+    const { hpp, cpp } = await generateDpcmTableFiles(dpcmDir, exportDir, outputName, dpcmTable);
+    await fs.writeFile(path.join(exportDir, `${outputName}.hpp`), hpp.join('\n'));
+    await fs.writeFile(path.join(exportDir, `${outputName}.cpp`), cpp.join('\n'));
+    if (dpcmTableFile) {
+      await fs.writeFile(dpcmTableFile, JSON.stringify(dpcmTable, null, 2));
+    } else {
+      console.log(JSON.stringify(dpcmTable, null, 2));
+    }
+    break;
+  }
+  case 'dpcm-export': {
+    const { inputFile, dpcmDir, overwrite } = args;
+    const dpcmFiles = await getDpcmFiles(dpcmDir);
+    const tree = parseFileIntoTree(await fs.readFile(inputFile, 'utf8'));
+    const samples = tree[0].children.filter(c => c.name === 'DPCMSample');
+    let sampleCount = 0;
+    for (const sample of samples) {
+      const name = sample.attributes.get('Name');
+      if (!name) continue;
+      const data = sample.attributes.get('Data');
+      if (!data) continue;
+      const initial = parseFloat(sample.attributes.get('DmcInitialValue') ?? '32');
+      if (isNaN(initial)) {
+        console.error(sample);
+        throw new Error('Invalid DmcInitialValue');
+      }
+      const dataNum: number[] = [];
+      for (let i = 0; i < data.length; i += 2) {
+        dataNum.push(parseInt(data.substr(i, 2), 16));
+      }
+      const pcm = decodeDpcm(initial, dataNum);
+      let dname = dpcmName(name);
+      const exists = dpcmFiles.find(d => d.toLowerCase() === dname.toLowerCase());
+      sampleCount++;
+      if (exists && !overwrite) {
+        console.log(`Skipping "${dname}", already exists: ${dpcmDir}/${exists}.wav`);
+      } else {
+        if (exists) {
+          dname = exists;
+        }
+        dpcmFiles.push(dname);
+        console.log(`${exists ? 'Overwriting' : 'Writing'} "${dname}": ${dpcmDir}/${dname}.wav`);
+        await writeWav(pcm, path.join(dpcmDir, `${dname}.wav`));
+      }
+    }
+    console.log(`Found ${sampleCount} DPCM sample${sampleCount !== 1 ? 's' : ''}: ${inputFile}`);
+    break;
+  }
+  default:
+    throw new Error(`Unknown command: ${cmd}`);
 }
 
 /*

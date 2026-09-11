@@ -7,14 +7,14 @@ void sndRenderAdpcmSet(
   uint32_t samples, // any length
   int volume,       // 0-256
   uint32_t *state,
-  uint8_t *&data
+  const uint8_t **data
 );
 void sndRenderAdpcmAdd(
   int16_t *out,
   uint32_t samples,
   int volume,
   uint32_t *state,
-  uint8_t *&data
+  const uint8_t **data
 );
 
 void sndRenderWaveTableSet1024(
@@ -102,7 +102,7 @@ extern "C" void sndRenderNoiseAdd(
   uint32_t *state
 );
 
-static inline int sndAdpcmStateFromHeader(uint8_t *data) {
+static inline int sndAdpcmStateFromHeader(const uint8_t *data) {
   int index = data[2];
   if (index > 88) index = 88;
   return data[0] | (data[1] << 8) | (index << 16);

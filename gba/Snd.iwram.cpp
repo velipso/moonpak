@@ -16,18 +16,19 @@ void sndRenderAdpcmSet(
   uint32_t samples,
   int volume,
   uint32_t *state,
-  uint8_t *&data
+  const uint8_t **data
 ) {
   int sample = (int16_t)(*state & 0xffff);
   int index = (*state >> 16) & 0x7f;
   bool secondHalf = *state & 0x00800000;
+  const uint8_t *dataPtr = *data;
   while (samples > 0) {
     int nibble;
     if (secondHalf) {
-      nibble = *data >> 4;
-      data++;
+      nibble = *dataPtr >> 4;
+      dataPtr++;
     } else {
-      nibble = *data & 15;
+      nibble = *dataPtr & 15;
     }
     secondHalf = !secondHalf;
 
@@ -49,6 +50,7 @@ void sndRenderAdpcmSet(
     *out++ = (sample * volume) >> 8; // SET
     samples--;
   }
+  *data = dataPtr;
   *state = (secondHalf ? 0x00800000 : 0) | (index << 16) | (sample & 0xffff);
 }
 
@@ -57,18 +59,19 @@ void sndRenderAdpcmAdd(
   uint32_t samples,
   int volume,
   uint32_t *state,
-  uint8_t *&data
+  const uint8_t **data
 ) {
   int sample = (int16_t)(*state & 0xffff);
   int index = (*state >> 16) & 0x7f;
   bool secondHalf = *state & 0x00800000;
+  const uint8_t *dataPtr = *data;
   while (samples > 0) {
     int nibble;
     if (secondHalf) {
-      nibble = *data >> 4;
-      data++;
+      nibble = *dataPtr >> 4;
+      dataPtr++;
     } else {
-      nibble = *data & 15;
+      nibble = *dataPtr & 15;
     }
     secondHalf = !secondHalf;
 
@@ -90,6 +93,7 @@ void sndRenderAdpcmAdd(
     *out++ += (sample * volume) >> 8; // ADD
     samples--;
   }
+  *data = dataPtr;
   *state = (secondHalf ? 0x00800000 : 0) | (index << 16) | (sample & 0xffff);
 }
 

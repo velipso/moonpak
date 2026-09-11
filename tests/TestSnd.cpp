@@ -6,6 +6,7 @@
 #include "gba/SndData.cpp"
 #include "data/songs/outro.cpp" // TODO: remove
 #include "data/songs/basic.cpp" // TODO: remove
+#include "data/dpcm/DpcmTable.cpp" // TODO: remove
 
 TestSnd::TestSnd() {
   Test::name = "Snd";

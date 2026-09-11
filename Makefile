@@ -15,6 +15,7 @@ root-dir            = $(if $(filter .,$(ROOT_DIR)),$(1),$(ROOT_DIR)/$(1))
 SRC_DIR            := $(call root-dir,src)
 GBA_DIR            := $(call root-dir,gba)
 DATA_DIR           := $(call root-dir,data)
+DPCM_DIR           := $(DATA_DIR)/dpcm
 SONGS_DIR          := $(DATA_DIR)/songs
 SPRSHEETS_DIR      := $(DATA_DIR)/spritesheets
 TYPES_DIR          := $(call root-dir,types)
@@ -24,6 +25,7 @@ SCRIPTS_DIR        := $(call root-dir,scripts)
 TGT_DIR            := $(call root-dir,tgt)
 TGT_DATA_DIR       := $(TGT_DIR)/data
 TGT_DATA_SRC_DIR   := $(TGT_DATA_DIR)/data
+TGT_DPCM_DIR       := $(TGT_DATA_SRC_DIR)/dpcm
 TGT_SONGS_DIR      := $(TGT_DATA_SRC_DIR)/songs
 TGT_SPRSHEETS_DIR  := $(TGT_DATA_SRC_DIR)/spritesheets
 TGT_TYPES_DIR      := $(TGT_DIR)/types
@@ -142,7 +144,7 @@ ARM_OBJCOPY        := arm-none-eabi-objcopy
 
 # -----
 
-.PHONY: all clean dump tests test test-v xform
+.PHONY: all clean dump tests test test-v xform dpcm-export dpcm-export-overwrite
 .DEFAULT_GOAL := all
 .SECONDARY:
 
@@ -289,27 +291,62 @@ $(ANIMATIONS_OBJ): $(ANIMATIONS_CPP)
 
 # -----
 
+DPCM_TABLE         := $(TGT_DPCM_DIR)/dpcm-table.json
+DPCM_TABLE_HPP     := $(TGT_DPCM_DIR)/DpcmTable.hpp
+DPCM_TABLE_CPP     := $(TGT_DPCM_DIR)/DpcmTable.cpp
+DPCM_TABLE_OBJ     := $(DPCM_TABLE_CPP:.cpp=.cpp.o)
 SONGS_TXT          := $(shell find $(SONGS_DIR) -type f -name '*.txt')
 SONGS_BIN          := $(patsubst $(SONGS_DIR)/%.txt,$(TGT_SONGS_DIR)/%.bin,$(SONGS_TXT))
 SONGS_HPP          := $(patsubst $(SONGS_DIR)/%.txt,$(TGT_SONGS_DIR)/%.hpp,$(SONGS_TXT))
 SONGS_CPP          := $(patsubst $(SONGS_DIR)/%.txt,$(TGT_SONGS_DIR)/%.cpp,$(SONGS_TXT))
 SONGS_OBJS         := $(patsubst $(SONGS_DIR)/%.txt,$(TGT_SONGS_DIR)/%.cpp.o,$(SONGS_TXT))
 
-$(TGT_SONGS_DIR)/%.bin: $(SONGS_DIR)/%.txt $(SCRIPTS_DIR)/famistudio.ts
+$(DPCM_TABLE) $(DPCM_TABLE_HPP) $(DPCM_TABLE_CPP): $(SONGS_TXT) $(SCRIPTS_DIR)/famistudio.ts
 	@mkdir -p $(@D)
-	node $(SCRIPTS_DIR)/famistudio.ts -o $@ $<
+	node $(SCRIPTS_DIR)/famistudio.ts dpcm-table -t $(DPCM_TABLE) -d $(DPCM_DIR) -x $(TGT_DPCM_DIR) \
+		$(SONGS_TXT)
+
+define run_with_dpcm_hint
+	$(info $(1))
+	@$(1); status=$$?;                                               \
+	if [ $$status -eq 2 ]; then                                      \
+		echo "\nMissing DPCM samples when building song:\n  $<" >&2;   \
+		echo "\nTry to extract the missing samples by running:\n" >&2; \
+		echo "  make dpcm-export\n" >&2;                               \
+	fi;                                                              \
+	exit $$status;
+endef
+
+$(TGT_SONGS_DIR)/%.bin: $(SONGS_DIR)/%.txt $(DPCM_TABLE) $(SCRIPTS_DIR)/famistudio.ts
+	@mkdir -p $(@D)
+	$(call run_with_dpcm_hint,node $(SCRIPTS_DIR)/famistudio.ts song -o $@ -t $(DPCM_TABLE) $<)
 
 $(TGT_SONGS_DIR)/%.hpp $(TGT_SONGS_DIR)/%.cpp: $(TGT_SONGS_DIR)/%.bin $(SCRIPTS_DIR)/embed.ts
 	@mkdir -p $(@D)
-	node $(SCRIPTS_DIR)/embed.ts \
-		-o $(TGT_SONGS_DIR)/$*.hpp \
-		-o $(TGT_SONGS_DIR)/$*.cpp \
-		-n $(TGT_DATA_DIR) \
-		$(TGT_SONGS_DIR)/$*.bin
+	node $(SCRIPTS_DIR)/embed.ts -o $(TGT_SONGS_DIR)/$*.hpp -o $(TGT_SONGS_DIR)/$*.cpp \
+		-n $(TGT_DATA_DIR) $(TGT_SONGS_DIR)/$*.bin
 
 $(TGT_SONGS_DIR)/%.cpp.o: $(TGT_SONGS_DIR)/%.cpp $(TGT_SONGS_DIR)/%.hpp $(TGT_SONGS_DIR)/%.bin
 	@mkdir -p $(@D)
 	$(ARM_CPP) $(ARM_CPPFLAGS) -MMD -MP -c -o $@ $<
+
+$(DPCM_TABLE_OBJ): $(DPCM_TABLE_CPP) $(DPCM_TABLE_HPP)
+	@mkdir -p $(@D)
+	$(ARM_CPP) $(ARM_CPPFLAGS) -MMD -MP -c -o $@ $<
+
+# -----
+
+dpcm-export:
+	@mkdir -p $(DPCM_DIR)
+	@set -e; for input in $(SONGS_TXT); do                              \
+		node $(SCRIPTS_DIR)/famistudio.ts dpcm-export -d $(DPCM_DIR) "$$input";  \
+	done
+
+dpcm-export-overwrite:
+	@mkdir -p $(DPCM_DIR)
+	@set -e; for input in $(SONGS_TXT); do                                 \
+		node $(SCRIPTS_DIR)/famistudio.ts dpcm-export -d $(DPCM_DIR) -f "$$input";  \
+	done
 
 # -----
 
@@ -348,15 +385,15 @@ $(TGT_SPRSHEETS_DIR)/%.hpp $(TGT_SPRSHEETS_DIR)/%.cpp: \
 	$(TGT_SPRSHEETS_DIR)/%.bin \
 	$(SCRIPTS_DIR)/embed.ts
 	@mkdir -p $(@D)
-	node $(SCRIPTS_DIR)/embed.ts \
-		-o $(TGT_SPRSHEETS_DIR)/$*.hpp \
-		-o $(TGT_SPRSHEETS_DIR)/$*.cpp \
-		-n $(TGT_DATA_DIR) \
+	node $(SCRIPTS_DIR)/embed.ts      \
+		-o $(TGT_SPRSHEETS_DIR)/$*.hpp  \
+		-o $(TGT_SPRSHEETS_DIR)/$*.cpp  \
+		-n $(TGT_DATA_DIR)              \
 		$(TGT_SPRSHEETS_DIR)/$*.bin
 
 $(TGT_SPRSHEETS_DIR)/%.cpp.o: \
-	$(TGT_SPRSHEETS_DIR)/%.cpp \
-	$(TGT_SPRSHEETS_DIR)/%.hpp \
+	$(TGT_SPRSHEETS_DIR)/%.cpp  \
+	$(TGT_SPRSHEETS_DIR)/%.hpp  \
 	$(TGT_SPRSHEETS_DIR)/%.bin
 	@mkdir -p $(@D)
 	$(ARM_CPP) $(ARM_CPPFLAGS) -MMD -MP -c -o $@ $<
@@ -381,10 +418,11 @@ ARM_OBJS           := \
 	$(patsubst $(SRC_DIR)/%.cpp,$(TGT_SRC_DIR)/%.cpp.o,$(SRC_CPP)) \
 	$(patsubst $(GBA_DIR)/%.cpp,$(TGT_GBA_DIR)/%.cpp.o,$(GBA_CPP)) \
 	$(TYPELIB_ARM_OBJ) \
-	$(TYPE_ARM_OBJS) \
-	$(ANIMATIONS_OBJ) \
-	$(PALETTE_OBJ) \
-	$(SONGS_OBJS) \
+	$(TYPE_ARM_OBJS)   \
+	$(ANIMATIONS_OBJ)  \
+	$(PALETTE_OBJ)     \
+	$(DPCM_TABLE_OBJ)  \
+	$(SONGS_OBJS)      \
 	$(SPRSHEETS_OBJS)
 ARM_DEPS           := $(ARM_OBJS:.o=.d)
 
@@ -420,12 +458,13 @@ $(TGT_GBA_DIR)/%.cpp.o: $(GBA_DIR)/%.cpp
 	@mkdir -p $(@D)
 	$(ARM_CPP) $(ARM_CPPFLAGS) -MMD -MP -c -o $@ $<
 
-$(ARM_OBJS): \
-	$(TYPELIB_HPP) \
-	$(TYPE_HPP) \
-	$(ANIMATIONS_HPP) \
-	$(PALETTE_HPP) \
-	$(SONGS_HPP) \
+$(ARM_OBJS):         \
+	$(TYPELIB_HPP)     \
+	$(TYPE_HPP)        \
+	$(ANIMATIONS_HPP)  \
+	$(PALETTE_HPP)     \
+	$(DPCM_TABLE_HPP)  \
+	$(SONGS_HPP)       \
 	$(SPRSHEETS_HPP)
 
 $(GBA_ELF): $(ARM_OBJS)
