@@ -145,8 +145,7 @@ class ChannelInfo {
       case 'Full': i = Math.floor(i * 63 / 15); break;
       default: throw new Error(`Invalid volume mapping: ${volumeMapping}`);
     }
-    const clamp = (num: number) =>
-      Math.max(0, Math.min(255, Math.floor(num * 256))); // TODO: pick the right scale
+    const clamp = (num: number) => Math.max(0, Math.min(255, Math.floor(num * 256)));
     if (typeof this.volumeScale === 'number') {
       return clamp(i * this.volumeScale);
     } else {
@@ -235,15 +234,17 @@ function parseNote(note: string | undefined, octaveOffset: number): number {
   return oct * 12 + n;
 }
 
-const EV_NOTE   = 0x0000;
-const EV_PCM    = 0x6c00;
-const EV_WAIT   = 0x8000;
-const EV_PATEND = 0x8100;
-const EV_NOINST = 0x8101;
-const EV_STOP   = 0x8102;
-const EV_INST1  = 0x8200;
-const EV_INST2  = 0x8300;
-const EV_VOL    = 0x8400;
+const EV_NOTE     = 0x0000;
+const EV_PCM      = 0x6c00;
+const EV_WAIT     = 0x8000;
+const EV_PATEND   = 0x8100;
+const EV_NOINST   = 0x8101;
+const EV_STOP     = 0x8102;
+const EV_INST1    = 0x8200;
+const EV_INST2    = 0x8300;
+const EV_VOL      = 0x8400;
+const EV_PATSKIP1 = 0x8500;
+const EV_PATSKIP2 = 0x8600;
 
 interface PatternEvent {
   frame: number;
@@ -312,6 +313,20 @@ class Events {
       frame,
       bias: 998,
       value: [EV_STOP]
+    });
+  }
+
+  skip(frame: number, column: number) {
+    // skip to next pattern if current column is `column`
+    if (!Number.isInteger(column) || column < 0 || column >= 512) {
+      throw new Error('Invalid pattern skip column');
+    }
+    this.push({
+      frame,
+      bias: 9999,
+      value: column < 256
+        ? [EV_PATSKIP1 | column]
+        : [EV_PATSKIP2 | (column - 256)]
     });
   }
 
@@ -821,13 +836,29 @@ function parseTreeIntoSong(
   const songs = project.children.filter(c => c.name === 'Song');
   for (const song of songs) {
     const songLength = parseFloat(song.attributes.get('Length') ?? '');
-    // TODO: implement non-looping songs
-    const songLoop = Math.max(0, parseFloat(song.attributes.get('LoopPoint') ?? '0'));
+    const songLoop = Math.max(-1, parseFloat(song.attributes.get('LoopPoint') ?? '-1'));
     const patternLength = parseFloat(song.attributes.get('PatternLength') ?? '');
     const noteLength = parseFloat(song.attributes.get('NoteLength') ?? '');
     if (isNaN(songLength) || isNaN(patternLength) || isNaN(noteLength)) {
       throw new Error('Invalid song attributes');
     }
+
+    const skips = song.children.filter(c => c.name === 'PatternCustomSettings').map(c => {
+      const column = parseFloat(c.attributes.get('Time') ?? '');
+      const cPatLength = parseFloat(c.attributes.get('Length') ?? '');
+      const cNoteLength = parseFloat(c.attributes.get('NoteLength') ?? '');
+      if (
+        isNaN(column) ||
+        isNaN(cPatLength) ||
+        isNaN(cNoteLength) ||
+        patternLength * noteLength === cPatLength * cNoteLength
+      ) {
+        return null;
+      } else {
+        return { column, frame: cPatLength * cNoteLength };
+      }
+    });
+
     const chans: Channel[] = [];
     const channels = song.children.filter(c => c.name === 'Channel');
     for (const channel of channels) {
@@ -835,6 +866,14 @@ function parseTreeIntoSong(
       if (!channelInfo) {
         console.error('Invalid channel:', channel);
         process.exit(1);
+      }
+
+      const instances = channel.children.filter(c => c.name === 'PatternInstance');
+      const columnToPatternName = new Map<number, string[]>();
+      for (const instance of instances) {
+        const column = parseFloat(instance.attributes.get('Time') ?? '');
+        const patternName = instance.attributes.get('Pattern') ?? '';
+        columnToPatternName.set(column, patternName);
       }
 
       const patts: Pattern[] = [];
@@ -846,6 +885,14 @@ function parseTreeIntoSong(
           throw new Error('Missing pattern name');
         }
         const events = new Events(patternLength * noteLength, channelInfo);
+
+        for (const skip of skips) {
+          if (!skip) continue;
+          if (columnToPatternName.get(skip.column) === patternName) {
+            // this pattern is in a column that has skip logic, so insert a skip command
+            events.skip(skip.frame, skip.column);
+          }
+        }
 
         let lastInstrument = -999;
         const notes = pattern.children.filter(c => c.name === 'Note');
@@ -942,15 +989,12 @@ function parseTreeIntoSong(
       for (let i = 0; i < songLength; i++) {
         insts.push(-1);
       }
-      const instances = channel.children.filter(c => c.name === 'PatternInstance');
-      for (const instance of instances) {
-        const time = parseFloat(instance.attributes.get('Time') ?? '');
-        const patternName = instance.attributes.get('Pattern') ?? '';
+      for (const [column, patternName] of columnToPatternName.entries()) {
         const index = patternNameToIndex.get(patternName);
-        if (isNaN(time) || typeof index === 'undefined') {
+        if (isNaN(column) || typeof index === 'undefined') {
           throw new Error('Invalid pattern instance');
         }
-        insts[time] = index;
+        insts[column] = index;
       }
 
       if (insts.some(i => i >= 0)) {
@@ -1337,7 +1381,7 @@ switch (cmd) {
       await fs.writeFile(outputFile, new Uint8Array(bytes));
     } else {
       for (let i = 0; i < bytes.length; i += 16) {
-        console.log(bytes.slice(i, i + 16).map(v => `0${v.toString(16)}`.substr(-2)).join(' '));
+        // TODO: console.log(bytes.slice(i, i + 16).map(v => `0${v.toString(16)}`.substr(-2)).join(' '));
       }
       console.log(bytes.length, 'bytes');
     }
@@ -1410,24 +1454,10 @@ switch (cmd) {
 /*
 TODO:
 
-DPCM samples:
-- initial value (DmcInitialValueDiv2) 0-63 (I think), default 32
-- data (bytes)
-{GenerateAttribute("Name", sample.Name)}
-{ConditionalGenerateAttribute("DmcInitialValue", sample.DmcInitialValueDiv2, sample.DmcInitialValueDiv2 != 32)}
-{GenerateAttribute("Data", String.Join("", sample.ProcessedData.Select(x => $"{x:x2}")))}");
-
-Instruments:
-- DPCM Mapping
-
 Arpeggios:
 - Length: 0-?
 - Loop point (optional)
 - Values (int8_t[] comma separated)
-
-note octaves are incorrect (surprise)
-for Triangle, it's correct, ranging from C0-B7
-everything else, it's off by one, ranging from C1-B8
 
 Songs:
 - Length

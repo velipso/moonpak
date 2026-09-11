@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 #pragma once
+#include "Snd.hpp"
 #include <stdint.h>
 
 void sndRenderAdpcmSet(

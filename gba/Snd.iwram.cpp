@@ -360,3 +360,29 @@ extern "C" void sndRenderNoiseAdd(
   *state = s;
 }
 #endif
+
+int Snd::tick() {
+  int samples = sndSampleCountPerFrame(frameCount++);
+  bool first = true;
+  if (masterVolume > 0) {
+    for (int i = 0; i < maxSongs; i++) {
+      SndSong &sndSong = songs[i];
+      if (sndSong.isEnabled()) {
+        first = sndSong.tick(bufferTemp, samples, masterVolume * songVolume, first);
+      }
+    }
+    for (int i = 0; i < maxSfxs; i++) {
+      SndPCM &sfx = sfxs[i];
+      if (sfx.isEnabled()) {
+        first = sfx.render(bufferTemp, samples, masterVolume * sfxVolume, first);
+      }
+    }
+  }
+  if (first) {
+    // nothing was rendered into the buffer, so we need to clear it
+    for (int i = 0; i < samples; i++) {
+      bufferTemp[i] = 0;
+    }
+  }
+  return samples;
+}
