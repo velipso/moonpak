@@ -110,7 +110,7 @@ struct SndPCM {
   SndPCM() { reset(); }
   void reset() { samplesLeft = 0; }
   bool isEnabled() { return samplesLeft > 0; }
-  bool render(int16_t *out, int samples, int songVolume, bool first);
+  bool render(int16_t *out, uint32_t samples, int songVolume, bool first);
 };
 
 struct SndSong {
@@ -133,14 +133,17 @@ struct SndSong {
 };
 
 struct Snd {
+  static Snd *global;
 #ifdef PLATFORM_GBA
-  int8_t bufferDMA[1216];
+  static constexpr int bufferDMACount = 2;
+  int8_t bufferDMA[608 * bufferDMACount];
+  uint16_t bufferState;
+  uint16_t bufferIndex;
 #endif
   int16_t bufferTemp[552];
-  uint8_t frameCount;
-  int dmaWriteIndex;
   SndSong *songs;
   SndPCM *sfxs;
+  uint8_t frameCount;
   int8_t masterVolume; // 0-16
   int8_t sfxVolume; // 0-16
   int8_t songVolume; // 0-16
@@ -150,8 +153,12 @@ struct Snd {
   Snd &reset();
   Snd(uint8_t maxSongs, uint8_t maxSfxs) : frameCount(0), masterVolume(16), sfxVolume(16),
     songVolume(16), maxSongs(maxSongs), maxSfxs(maxSfxs) {
+    Snd::global = this;
     songs = (SndSong *)malloc(sizeof(SndSong) * maxSongs);
     sfxs = (SndPCM *)malloc(sizeof(SndPCM) * maxSfxs);
+#ifdef PLATFORM_GBA
+    bufferState = 0xff; // flag that we need to run init()
+#endif
     reset();
   }
   ~Snd() { free(songs); free(sfxs); }
@@ -166,6 +173,12 @@ struct Snd {
   }
   bool isSongDone(int targetIndex) { return songs[targetIndex].isDone(); }
   int tick(); // returns how many samples were written
+
+#ifdef PLATFORM_GBA
+  void init();
+  void copy();
+  static void timer1Handler();
+#endif
 
 #ifdef TESTS
   static int test(bool verbose);

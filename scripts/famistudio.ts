@@ -1175,6 +1175,7 @@ function serializeSong(out: SongFile): number[] {
       for (const inst of channel.instances) {
         write16(inst);
       }
+      align32();
       const pattRewrite = channel.patterns.map(() => rewrite32());
       for (const pattern of channel.patterns) {
         align32();
@@ -1439,10 +1440,10 @@ function printFile(data: Uint8Array) {
     return a | (b * (1 << 16));
   };
   const align16 = () => {
-    while (dataIndex & 2) dataIndex++;
+    while (dataIndex & 1) dataIndex++;
   };
   const align32 = () => {
-    while (dataIndex & 4) dataIndex++;
+    while (dataIndex & 3) dataIndex++;
   };
   const jumpTo = (v: number) => { dataIndex = v; };
 
@@ -1519,6 +1520,7 @@ function printFile(data: Uint8Array) {
         console.log(`      ` +
           `${instances.slice(s, s + 16).join(', ')}${s + 16 < instances.length ? ',' : ''}`);
       }
+      align32();
       const patternOffset = Array.from({ length: patternsLength }).map(() => read32());
       for (let pi = 0; pi < patternOffset.length; pi++) {
         const patOffset = patternOffset[pi];

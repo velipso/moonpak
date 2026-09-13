@@ -113,8 +113,8 @@ start_vector:
     ldr     r2, =__libc_init_array
     bl      blx_r2_trampoline
 
-    // Call gvmain()
-    ldr     r2, =gvmain
+    // Call main()
+    ldr     r2, =main
     bl      blx_r2_trampoline
 
     // Global destructors

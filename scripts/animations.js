@@ -461,8 +461,8 @@ function finish({ verbose, outputHPP, outputCPP }) {
       `#pragma once`,
       `#include <stdint.h>`,
       ``,
-      `struct SprEntry;`,
-      `typedef bool (*f_animFireHandler)(int8_t handle, SprEntry &spr, int param);`,
+      `struct SprEntryData;`,
+      `typedef bool (*f_animFireHandler)(int8_t handle, SprEntryData &spr, int param);`,
       ``,
       `namespace AnimData {`,
       `  extern const f_animFireHandler handlers[];`,
@@ -498,7 +498,7 @@ function finish({ verbose, outputHPP, outputCPP }) {
     if (handlers.length > 0) {
       cpp.push(``);
       for (const h of handlers) {
-        cpp.push(`extern bool ${h}(int8_t handle, SprEntry &spr, int param);`);
+        cpp.push(`extern bool ${h}(int8_t handle, SprEntryData &spr, int param);`);
       }
     }
     if (spritesheets.length > 0) {
@@ -547,7 +547,8 @@ function finish({ verbose, outputHPP, outputCPP }) {
       `  };`,
       ``,
       `  alignas(4) const uint16_t data[] = {`,
-      `  // global STOP and DESTROY`,
+      `    // global STOP and DESTROY`,
+      `   `,
     );
     for (let i = 0; i < out.length; i++) {
       const name = indexToAnimation.get(i);

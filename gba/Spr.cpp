@@ -14,8 +14,8 @@ static bool g_doubleFree;
 #define log(fmt, ...) if (g_verbose) printf(fmt, ##__VA_ARGS__)
 
 // dummy animation data for tests
-struct SprEntry;
-typedef bool (*f_animFireHandler)(int8_t handle, SprEntry &spr, int param);
+struct SprEntryData;
+typedef bool (*f_animFireHandler)(int8_t handle, SprEntryData &spr, int param);
 
 namespace AnimData {
   const f_animFireHandler handlers[] = {0};
@@ -54,6 +54,8 @@ static inline int sprRand12(Spr *spr, int low, int high) {
 static inline int clampU8(int v) {
   return v < 0 ? 0 : v > 255 ? 255 : v;
 }
+
+Spr *Spr::global = nullptr;
 
 Spr &Spr::reset() {
   for (int i = 0; i < 4; i++) {
@@ -116,7 +118,14 @@ const struct {
   {  0,  0,  0 }, // extra entries to align to 4 bytes
 };
 
-int8_t sprAlloc(Spr &spr, int width, int height, uint8_t priority, bool is256, int8_t clone) {
+static int8_t sprAlloc(
+  Spr &spr,
+  int width,
+  int height,
+  uint8_t priority,
+  bool is256,
+  int8_t clone
+) {
   // find sprite size entry for these dimensions
   int w1, h1, w2, h2;
   for (int i = 0; spriteSizes[i].fullW; i++) {
@@ -163,23 +172,26 @@ retry:
   int16_t vramObjHandle2 = -1;
   bool stackedWidth = height == h2;
 
-  oamHandle1 = spr.oam.alloc(priority);
+  oamHandle1 = Oam::global->alloc(priority);
   if (oamHandle1 < 0) goto fail;
   if (clone >= 0) {
     vramObjHandle1 = spr.entries[clone].vramObjHandle1();
   } else {
-    vramObjHandle1 = spr.vramObj.alloc(w1, h1, is256);
+    vramObjHandle1 = VramObj::global->alloc(w1, h1, is256);
     if (vramObjHandle1 < 0) goto fail;
   }
+  Oam::global->fromVramObj(oamHandle1, vramObjHandle1);
+
   if (w2) {
-    oamHandle2 = spr.oam.alloc(priority);
+    oamHandle2 = Oam::global->alloc(priority);
     if (oamHandle2 < 0) goto fail;
     if (clone >= 0) {
       vramObjHandle2 = spr.entries[clone].vramObjHandle2();
     } else {
-      vramObjHandle2 = spr.vramObj.alloc(w2, h2, is256);
+      vramObjHandle2 = VramObj::global->alloc(w2, h2, is256);
       if (vramObjHandle2 < 0) goto fail;
     }
+    Oam::global->fromVramObj(oamHandle2, vramObjHandle2);
   }
 
   // everything allocated!
@@ -208,10 +220,10 @@ retry:
 
   return handle;
 fail:
-  spr.oam.free(oamHandle1);
-  spr.oam.free(oamHandle2);
-  spr.vramObj.free(vramObjHandle1);
-  spr.vramObj.free(vramObjHandle2);
+  Oam::global->free(oamHandle1);
+  Oam::global->free(oamHandle2);
+  VramObj::global->free(vramObjHandle1);
+  VramObj::global->free(vramObjHandle2);
   spr.avail[handle >> 5] |= 1 << (handle & 0x1f);
   return -1;
 }
@@ -241,15 +253,15 @@ Spr &Spr::free(int8_t handle) {
     g_doubleFree = true;
   }
 #endif
-  SprEntry &e = entries[handle];
+  SprEntryData &e = entries[handle];
   if (e.rotateAlloc()) {
-    oam.freeRotate(e.rotateIndex());
+    Oam::global->freeRotate(e.rotateIndex());
   }
-  oam.free(e.oamHandle1());
-  oam.free(e.oamHandle2());
+  Oam::global->free(e.oamHandle1());
+  Oam::global->free(e.oamHandle2());
   if (!e.clone()) {
-    vramObj.free(e.vramObjHandle1());
-    vramObj.free(e.vramObjHandle2());
+    VramObj::global->free(e.vramObjHandle1());
+    VramObj::global->free(e.vramObjHandle2());
   }
   e.oamHandle1(-1); // flag as unallocated
   avail[i] |= mask;
@@ -257,19 +269,19 @@ Spr &Spr::free(int8_t handle) {
 }
 
 int Spr::tileWidth(int8_t handle) {
-  SprEntry &entry = entries[handle];
-  int result = vramObj.tileWidth(entry.vramObjHandle1());
+  SprEntryData &entry = entries[handle];
+  int result = VramObj::global->tileWidth(entry.vramObjHandle1());
   if (entry.vramObjHandle2() >= 0 && entry.stackedWidth()) {
-    result += vramObj.tileWidth(entry.vramObjHandle2());
+    result += VramObj::global->tileWidth(entry.vramObjHandle2());
   }
   return result;
 }
 
 int Spr::tileHeight(int8_t handle) {
-  SprEntry &entry = entries[handle];
-  int result = vramObj.tileHeight(entry.vramObjHandle1());
+  SprEntryData &entry = entries[handle];
+  int result = VramObj::global->tileHeight(entry.vramObjHandle1());
   if (entry.vramObjHandle2() >= 0 && !entry.stackedWidth()) {
-    result += vramObj.tileHeight(entry.vramObjHandle2());
+    result += VramObj::global->tileHeight(entry.vramObjHandle2());
   }
   return result;
 }
@@ -289,7 +301,7 @@ Spr &Spr::queueCopyTiles(int8_t handle, const uint8_t *src) {
 }
 
 Spr &Spr::copyTiles(int8_t handle, const uint8_t *src) {
-  SprEntry &e = entries[handle];
+  SprEntryData &e = entries[handle];
   if (e.oamHandle2() >= 0) {
     // double entry
     if (e.stackedWidth()) {
@@ -338,7 +350,7 @@ Spr &Spr::copyTiles(int8_t handle, const uint8_t *src) {
   return *this;
 }
 
-Spr &Spr::flushQueue() {
+Spr &Spr::copy() {
   for (int i = 0; i < copyListSize; i++) {
     copyTiles(copyList[i].handle, copyList[i].src);
   }
@@ -348,7 +360,7 @@ Spr &Spr::flushQueue() {
 
 Spr &Spr::tick() {
   for (int handle = 0; handle < 128; handle++) {
-    SprEntry &e = entries[handle];
+    SprEntryData &e = entries[handle];
     if (e.oamHandle1() < 0) continue;
     int randomState = 0; // unused, randomU8, randomI8, randomI12
     u32 randomLow = 0;
@@ -409,16 +421,16 @@ Spr &Spr::tick() {
                       goto next_entity;
                     case 0x2: // VISIBLEON
                       // TODO: handle rotation sprites
-                      oam.show(e.oamHandle1(), true);
+                      Oam::global->show(e.oamHandle1(), true);
                       if (e.oamHandle2() >= 0) {
-                        oam.show(e.oamHandle2(), true);
+                        Oam::global->show(e.oamHandle2(), true);
                       }
                       break;
                     case 0x3: // VISIBLEOFF
                       // TODO: handle rotation sprites
-                      oam.show(e.oamHandle1(), false);
+                      Oam::global->show(e.oamHandle1(), false);
                       if (e.oamHandle2() >= 0) {
-                        oam.show(e.oamHandle2(), false);
+                        Oam::global->show(e.oamHandle2(), false);
                       }
                       break;
                     case 0x4: // WORLDON
@@ -436,15 +448,15 @@ Spr &Spr::tick() {
                       e.gravityAxisX(0);
                       break;
                     case 0x8: // MOSAICON
-                      oam.mosaic(e.oamHandle1(), true);
+                      Oam::global->mosaic(e.oamHandle1(), true);
                       if (e.oamHandle2() >= 0) {
-                        oam.mosaic(e.oamHandle2(), true);
+                        Oam::global->mosaic(e.oamHandle2(), true);
                       }
                       break;
                     case 0x9: // MOSAICOFF
-                      oam.mosaic(e.oamHandle1(), false);
+                      Oam::global->mosaic(e.oamHandle1(), false);
                       if (e.oamHandle2() >= 0) {
-                        oam.mosaic(e.oamHandle2(), false);
+                        Oam::global->mosaic(e.oamHandle2(), false);
                       }
                       break;
                     case 0xa: // HFLIPON
@@ -453,9 +465,9 @@ Spr &Spr::tick() {
                         e.xyDirty(1);
                         e.angDirty(1);
                       } else {
-                        oam.hFlip(e.oamHandle1(), true);
+                        Oam::global->hFlip(e.oamHandle1(), true);
                         if (e.oamHandle2() >= 0) {
-                          oam.hFlip(e.oamHandle2(), true);
+                          Oam::global->hFlip(e.oamHandle2(), true);
                           e.xyDirty(1);
                         }
                       }
@@ -466,9 +478,9 @@ Spr &Spr::tick() {
                         e.xyDirty(1);
                         e.angDirty(1);
                       } else {
-                        oam.hFlip(e.oamHandle1(), false);
+                        Oam::global->hFlip(e.oamHandle1(), false);
                         if (e.oamHandle2() >= 0) {
-                          oam.hFlip(e.oamHandle2(), false);
+                          Oam::global->hFlip(e.oamHandle2(), false);
                           e.xyDirty(1);
                         }
                       }
@@ -479,9 +491,9 @@ Spr &Spr::tick() {
                         e.xyDirty(1);
                         e.angDirty(1);
                       } else {
-                        oam.vFlip(e.oamHandle1(), true);
+                        Oam::global->vFlip(e.oamHandle1(), true);
                         if (e.oamHandle2() >= 0) {
-                          oam.vFlip(e.oamHandle2(), true);
+                          Oam::global->vFlip(e.oamHandle2(), true);
                           e.xyDirty(1);
                         }
                       }
@@ -492,16 +504,16 @@ Spr &Spr::tick() {
                         e.xyDirty(1);
                         e.angDirty(1);
                       } else {
-                        oam.vFlip(e.oamHandle1(), false);
+                        Oam::global->vFlip(e.oamHandle1(), false);
                         if (e.oamHandle2() >= 0) {
-                          oam.vFlip(e.oamHandle2(), false);
+                          Oam::global->vFlip(e.oamHandle2(), false);
                           e.xyDirty(1);
                         }
                       }
                       break;
                     case 0xe: // ANGOFF
                       if (e.rotateAlloc()) {
-                        oam.freeRotate(e.rotateIndex());
+                        Oam::global->freeRotate(e.rotateIndex());
                         e.rotateFlags(0);
                       }
                       break;
@@ -529,7 +541,7 @@ Spr &Spr::tick() {
                       break;
                     case 0x3: // ISVISIBLE
                       // TODO: oam.show is invalid for rotation sprites
-                      e.jumpCondition(oam.show(e.oamHandle1()) ? 1 : 0);
+                      e.jumpCondition(Oam::global->show(e.oamHandle1()) ? 1 : 0);
                       break;
                     case 0x4: // ISWORLD
                       e.jumpCondition(e.worldSpace());
@@ -544,17 +556,17 @@ Spr &Spr::tick() {
                       e.jumpCondition(e.fireResult());
                       break;
                     case 0x8: // ISMOSAIC
-                      e.jumpCondition(oam.mosaic(e.oamHandle1()) ? 1 : 0);
+                      e.jumpCondition(Oam::global->mosaic(e.oamHandle1()) ? 1 : 0);
                       break;
                     case 0x9: // ISHFLIP
                       e.jumpCondition(e.rotateAlloc()
                         ? e.rotateHFlip()
-                        : (oam.hFlip(e.oamHandle1()) ? 1 : 0));
+                        : (Oam::global->hFlip(e.oamHandle1()) ? 1 : 0));
                       break;
                     case 0xa: // ISVFLIP
                       e.jumpCondition(e.rotateAlloc()
                         ? e.rotateVFlip()
-                        : (oam.vFlip(e.oamHandle1()) ? 1 : 0));
+                        : (Oam::global->vFlip(e.oamHandle1()) ? 1 : 0));
                       break;
                     case 0xb: // ...reserved
                     case 0xc:
@@ -567,13 +579,13 @@ Spr &Spr::tick() {
                 case 0x3: break; // reserved
                 // 4-bit params
                 case 0x4: // MODE
-                  oam.mode(e.oamHandle1(), param);
+                  Oam::global->mode(e.oamHandle1(), param);
                   if (e.oamHandle2() >= 0) {
-                    oam.mode(e.oamHandle2(), param);
+                    Oam::global->mode(e.oamHandle2(), param);
                   }
                   break;
                 case 0x5: // ISMODE
-                  e.jumpCondition(oam.mode(e.oamHandle1()) == param ? 1 : 0);
+                  e.jumpCondition(Oam::global->mode(e.oamHandle1()) == param ? 1 : 0);
                   break;
                 case 0x6: // WAIT
                   e.wait(param);
@@ -606,7 +618,7 @@ Spr &Spr::tick() {
               e.spritesheet(param);
               break;
             case 0x4: // COPY
-              queueCopyTiles(handle, AnimData::spritesheets[param]);
+              queueCopyTiles(handle, AnimData::spritesheets[e.spritesheet()], param);
               break;
             case 0x5: // JUMPANIM
               e.pc(AnimData::jumpAnimations[param] - 1);
@@ -615,18 +627,18 @@ Spr &Spr::tick() {
               e.jumpCondition(sprRand(this) < param ? 1 : 0);
               break;
             case 0x7: // PRIORITYSET
-              oam.priority(e.oamHandle1(), param);
+              Oam::global->priority(e.oamHandle1(), param);
               if (e.oamHandle2() >= 0) {
-                oam.priority(e.oamHandle2(), param);
+                Oam::global->priority(e.oamHandle2(), param);
               }
               break;
             case 0x8: // PRIORITYADD
               if (param >= 128) param -= 256;
-              param += oam.priority(e.oamHandle1());
+              param += Oam::global->priority(e.oamHandle1());
               param = clampU8(param);
-              oam.priority(e.oamHandle1(), param);
+              Oam::global->priority(e.oamHandle1(), param);
               if (e.oamHandle2() >= 0) {
-                oam.priority(e.oamHandle2(), param);
+                Oam::global->priority(e.oamHandle2(), param);
               }
               break;
             case 0x9: // ROTATEOX
@@ -732,7 +744,7 @@ Spr &Spr::tick() {
       // advance PC
       e.pc(e.pc() + 1);
     }
-    flush_entity:
+flush_entity:
     if (e.xyDirty()) {
       e.xyDirty(0);
       int x = 240;
@@ -857,7 +869,7 @@ xyrot_done:;
         */
       } else {
         // sprite does not have rotation
-        if (oam.show(e.oamHandle1())) {
+        if (Oam::global->show(e.oamHandle1())) {
           if (e.worldSpace()) {
             x = -worldXValue;
             y = -worldYValue;
@@ -873,16 +885,16 @@ xyrot_done:;
             y = 160;
           }
         }
-        oam.x(e.oamHandle1(), x).y(e.oamHandle1(), y);
+        Oam::global->x(e.oamHandle1(), x).y(e.oamHandle1(), y);
         if (e.oamHandle2() >= 0) {
           if (e.stackedWidth()) {
-            x += oam.width(e.oamHandle1());
+            x += Oam::global->width(e.oamHandle1());
             if (x > 240) x = 240;
           } else {
-            y += oam.height(e.oamHandle1());
+            y += Oam::global->height(e.oamHandle1());
             if (y > 160) y = 160;
           }
-          oam.x(e.oamHandle2(), x).y(e.oamHandle2(), y);
+          Oam::global->x(e.oamHandle2(), x).y(e.oamHandle2(), y);
         }
       }
     }
@@ -890,9 +902,9 @@ xyrot_done:;
       e.angDirty(0);
       int cos = sin14[e.rotateAngle() + 30] >> 6; // cos(ang);
       int sin = sin14[e.rotateAngle()] >> 6;
-      oam.PABCD(e.rotateIndex(), cos, sin, -sin, cos);
+      Oam::global->PABCD(e.rotateIndex(), cos, sin, -sin, cos);
     }
-    next_entity:;
+next_entity:;
   }
   return *this;
 }
@@ -909,7 +921,7 @@ int Spr::test(bool verbose) {
   g_verbose = verbose;
   Oam oam;
   VramObj vramObj;
-  Spr spr(oam, vramObj);
+  Spr spr;
   for (int i = 0; spriteSizes[i].fullW; i++) {
     int w = spriteSizes[i].fullW;
     int h = spriteSizes[i].fullH;

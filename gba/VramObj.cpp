@@ -13,6 +13,8 @@ static bool g_doubleFree;
 #define log(fmt, ...)
 #endif
 
+VramObj *VramObj::global = nullptr;
+
 VramObj &VramObj::reset() {
   for (int i = 0; i < 32; i++) {
     avail[i] = 0xffffffffu;

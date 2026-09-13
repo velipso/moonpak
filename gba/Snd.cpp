@@ -5,6 +5,11 @@
 #include "data/dpcm/DpcmTable.hpp"
 #include <stdlib.h>
 
+#ifdef PLATFORM_GBA
+#include "gba/Irq.hpp"
+#include "gba/Reg.hpp"
+#endif
+
 #ifdef TESTS
 #include <random>
 #include <stdio.h>
@@ -193,8 +198,8 @@ void SndChannel::advance() {
 // SndPCM
 //
 
-bool SndPCM::render(int16_t *out, int samples, int pcmVolume, bool first) {
-  int renderLeft = samples < samplesLeft ? samples : samplesLeft;
+bool SndPCM::render(int16_t *out, uint32_t samples, int pcmVolume, bool first) {
+  uint32_t renderLeft = samples < samplesLeft ? samples : samplesLeft;
   if (renderLeft <= 0) return first;
   int volume = 73; // chosen to roughly match FamiStudio DPCM channel
   volume = (volume * pcmVolume) >> 8;
@@ -293,11 +298,12 @@ void SndSong::loadColumn(int col) {
     const FamiChannel &channel = *(const FamiChannel *)&root()[song->channelsOffset[ch]];
     int pa = column < 0 ? -1 : channel.instances[column];
 
-    const uint32_t *patternsOffset = (const uint32_t *)&root()[
+    uint32_t patternsOffsetPos =
       song->channelsOffset[ch] +
       sizeof(FamiChannel) +
-      sizeof(uint16_t) * song->songLength
-    ];
+      sizeof(uint16_t) * song->songLength;
+    patternsOffsetPos = (patternsOffsetPos + 3) & ~3;
+    const uint32_t *patternsOffset = (const uint32_t *)&root()[patternsOffsetPos];
 
     channels[ch].reset(
       channel.kind,
@@ -456,6 +462,83 @@ next_channel:;
 // Snd
 //
 
+Snd *Snd::global = nullptr;
+
+#ifdef PLATFORM_GBA
+void Snd::init() {
+  Reg::IME::set(0);
+
+  // initialize buffer
+  bufferState = 0;
+  bufferIndex = 0;
+  for (uint32_t i = 0; i < sizeof(bufferDMA); i++) {
+    bufferDMA[i] = 0;
+  }
+
+  // enable timer1 to rotate DMA buffers
+  Irq::timer1(timer1Handler);
+  Reg::IE::update().timer1(1).done();
+
+  // setup timers
+  Reg::TM0CNT::set(0);
+  Reg::TM1CNT::set(0);
+
+  // setup timer0 - drives the sample rate
+  // cpuHz      = 2^24
+  // sampleRate = 2^15
+  // timer0Wait = cpuHz / sampleRate = 2^9 = 0x200
+  // timer0Res  = 1 cycle
+  // timer0Wait / timer0Res = 0x200
+  Reg::TM0D::set(0x10000 - 0x200);
+
+  // setup timer1 - drives the DMA buffer cycling
+  // bufferSize = 0x260
+  // timer1Wait = bufferSize * timer0Wait = 311296 cycles
+  // timer1Res  = 64 cycles
+  // timer1Wait / timer1Res = 0x1300
+  Reg::TM1D::set(0x10000 - 0x1300);
+
+  Reg::IME::set(1);
+
+  // turn sound chip on
+  Reg::SOUNDCNT_X::write()
+    .master(1)
+    .done();
+
+  // set sound to use FIFO A
+  Reg::SOUNDCNT_H::write()
+    .psgVolume(2) // 100%
+    .dmaAVolume(1)
+    .dmaARight(1)
+    .dmaALeft(1)
+    .dmaATimer(0)
+    .dmaAReset(1)
+    .done();
+
+  // set DMA1 destination to FIFO A
+  Reg::DMA1DAD::set((uint32_t)Reg::FIFO_A::addr());
+
+  // point DMA1 to buffer1
+  Reg::DMA1SAD::set((uint32_t)bufferDMA);
+
+  // enable DMA1
+  Reg::DMA1CNT_H::write()
+    .destControl(2)   // fixed destination
+    .sourceControl(0) // increment source
+    .repeat(1)
+    .word32(1)
+    .timing(3) // sound FIFO
+    .enable(1)
+    .done();
+
+  // start timer0
+  Reg::TM0CNT::write().enable(1).done();
+
+  // start timer1
+  Reg::TM1CNT::write().prescaler(1).irq(1).enable(1).done();
+}
+#endif
+
 Snd &Snd::reset() {
   for (int i = 0; i < maxSongs; i++) {
     songs[i].reset();
@@ -543,7 +626,7 @@ int Snd::test(bool verbose) {
   g_verbose = verbose;
 
   Snd snd(1, 0);
-  snd.loadSong(0, dataSongsBasic, 0);
+  snd.loadSong(0, dataSongsOutro, 0);
   snd.setSongLoopsLeft(0, 0);
   while (!snd.isDone()) {
     int sampleCount = snd.tick();

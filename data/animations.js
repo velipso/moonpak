@@ -14,7 +14,6 @@ define(() => {
       repeat(2, () => {
         for (let j = 0; j < i * 2; j++) {
           copy(1);
-          fire('testEvent');
         }
         wait(2);
         copy(0);

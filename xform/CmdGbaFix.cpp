@@ -83,7 +83,11 @@ static int gbaFix(
     p++;
 
     if (size > 10000) {
-      printf("ROM size: %ldK + %ld bytes padding = %ldK\n", size >> 10, p - size, p);
+      if (p - size > 10000) {
+        printf("ROM size: %ldK + %ldK padding = %ldK\n", size >> 10, (p - size) >> 10, p >> 10);
+      } else {
+        printf("ROM size: %ldK + %ld bytes padding = %ldK\n", size >> 10, p - size, p >> 10);
+      }
     } else {
       printf("ROM size: %ld bytes + %ld bytes padding = %ld bytes\n", size, p - size, p);
     }

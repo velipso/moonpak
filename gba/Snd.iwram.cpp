@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 #include "Snd.iwram.hpp"
+#ifdef PLATFORM_GBA
+#include "gba/Reg.hpp"
+#endif
 
 static const int16_t adpcmStepSize[] = {
   7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73,
@@ -289,7 +292,7 @@ void sndRenderWaveTableAdd128(
   *phase = p;
 }
 
-#ifdef PLATFORM_HOST
+// TODO: #ifdef PLATFORM_HOST
 extern "C" void sndRenderNoiseSet(
   int16_t *out,
   uint32_t samples,
@@ -359,7 +362,7 @@ extern "C" void sndRenderNoiseAdd(
   *phase = p;
   *state = s;
 }
-#endif
+// TODO: #endif
 
 int Snd::tick() {
   int samples = sndSampleCountPerFrame(frameCount++);
@@ -386,3 +389,49 @@ int Snd::tick() {
   }
   return samples;
 }
+
+#ifdef PLATFORM_GBA
+void Snd::copy() {
+  if (bufferState == 0xff) {
+    // if we haven't initialized yet, then spend this frame initializing and letting the DMA get
+    // ahead a frame
+    init();
+    return;
+  }
+  int samples = tick();
+  int16_t *read = bufferTemp;
+  while (samples > 0) {
+    int write = sizeof(bufferDMA) - bufferIndex;
+    if (write > samples) write = samples;
+    samples -= write;
+    while (write-- > 0) {
+      int sample = (*read++) >> 8;
+      bufferDMA[bufferIndex++] = sample < -128 ? -128 : sample > 127 ? 127 : sample;
+    }
+    if (bufferIndex >= sizeof(bufferDMA)) {
+      bufferIndex -= sizeof(bufferDMA);
+    }
+  }
+}
+
+void Snd::timer1Handler() {
+  Snd &snd = *Snd::global;
+
+  snd.bufferState++;
+  if (snd.bufferState >= Snd::bufferDMACount) {
+    snd.bufferState = 0;
+  }
+  uint32_t source = (uint32_t)&snd.bufferDMA[snd.bufferState * 608];
+
+  Reg::DMA1CNT_H::set(0);
+  Reg::DMA1SAD::set(source);
+  Reg::DMA1CNT_H::write()
+    .destControl(2)   // fixed destination
+    .sourceControl(0) // incremenet source
+    .repeat(1)
+    .word32(1)
+    .timing(3) // sound FIFO
+    .enable(1)
+    .done();
+}
+#endif

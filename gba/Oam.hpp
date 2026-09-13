@@ -186,6 +186,7 @@ static inline uint16_t oamSetPalette(uint16_t shadow2, int value) {
 }
 
 struct Oam {
+  static Oam *global;
   uint16_t shadow[512];        // shadow OAM
   uint32_t handleAvail[4];     // 128 bits flagging if a handle is available
   uint32_t rotateAvail;        // 32 bits flagging if a rotate slot is available
@@ -195,7 +196,7 @@ struct Oam {
   uint8_t totalEntries;
 
   Oam &reset();
-  Oam() { reset(); }
+  Oam() { Oam::global = this; reset(); }
   int8_t alloc(uint8_t priority); // allocates entry; returns handle (0-127) or -1 for out of memory
   bool isEmpty();
   Oam &free(int8_t handle);
@@ -508,20 +509,19 @@ struct Oam {
 };
 
 struct OamEntry {
-  Oam &oam;
   int8_t handle;
   uint16_t shadow0;
   uint16_t shadow1;
   uint16_t shadow2;
 
   OamEntry &priority(uint8_t priority) {
-    oam.priority(handle, priority);
+    Oam::global->priority(handle, priority);
     shadow2 = (shadow2 & 0xf3ff) | ((priority >> 6) << 10);
     return *this;
   }
 
   uint8_t priority() {
-    return oam.handlePriority[handle];
+    return Oam::global->handlePriority[handle];
   }
 
   //
@@ -688,14 +688,14 @@ struct OamEntry {
   }
 
   void done() {
-    int k = oam.handleToIndex[handle] * 4;
-    oam.shadow[k + 0] = shadow0;
-    oam.shadow[k + 1] = shadow1;
-    oam.shadow[k + 2] = shadow2;
+    int k = Oam::global->handleToIndex[handle] * 4;
+    Oam::global->shadow[k + 0] = shadow0;
+    Oam::global->shadow[k + 1] = shadow1;
+    Oam::global->shadow[k + 2] = shadow2;
   }
 };
 
 inline OamEntry Oam::entry(int8_t handle) {
   int k = handleToIndex[handle] * 4;
-  return { *this, handle, shadow[k + 0], shadow[k + 1], shadow[k + 2] };
+  return { handle, shadow[k + 0], shadow[k + 1], shadow[k + 2] };
 }

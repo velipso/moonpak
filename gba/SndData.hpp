@@ -21,7 +21,7 @@ namespace SndData {
         0xffffffff,
         Math.floor((rate / sampleRate) * 0x100000000),
       );
-      console.log(`0x${dphase.toString(16).padStart(8, '0')}u,`);
+      console.log(`0x${`00${dphase.toString(16)}`.substr(-8)}u,`);
     }
     */
     0x036fed7fu,

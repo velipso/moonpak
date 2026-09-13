@@ -31,10 +31,11 @@
 #include <stdint.h>
 
 struct VramObj {
+  static VramObj *global;
   uint32_t avail[32]; // 1024 bits, for each 4bpp 8x8 cell in VRAM
 
   VramObj &reset(); // frees all memory
-  VramObj() { reset(); }
+  VramObj() { VramObj::global = this; reset(); }
   VramObj &resetBitmap(); // reserves first 512 tiles, frees second 512 tiles (for bitmap modes 3-5)
   bool isEmpty();
   bool isEmptyBitmap();

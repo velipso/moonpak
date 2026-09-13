@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: 0BSD
-struct SprEntry {
+struct SprEntryData {
   u32 pc;
 
   u16 {

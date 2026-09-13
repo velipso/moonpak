@@ -13,6 +13,8 @@ static bool g_doubleFree;
 #define log(fmt, ...)
 #endif
 
+Oam *Oam::global = nullptr;
+
 Oam &Oam::reset() {
   uint16_t rot[] = { 256, 0, 0, 256 }; // identity transform
   uint16_t *o = shadow;

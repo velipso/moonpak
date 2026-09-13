@@ -1,20 +1,29 @@
 // SPDX-License-Identifier: 0BSD
-#include "gvmain.hpp"
-#include "gba/gba.hpp"
+#include "main.hpp"
 #include "types/Player.hpp"
 #include "data/palette.hpp"
 #include "data/spritesheets/digits.8x8.hpp"
 #include "data/animations.hpp"
+#include "data/songs/outro.hpp"
+#include "data/songs/basic.hpp"
 
-static Oam g_oam;
-static VramObj g_vramObj;
-static Spr g_spr(g_oam, g_vramObj);
+Oam g_oam;
+VramObj g_vramObj;
+Spr g_spr;
+Snd g_snd(2, 4);
 
 static void irq_vblank() {
   g_oam.copy();
+  g_spr.copy();
 }
 
-extern "C" void gvmain() {
+static inline void nextframe() {
+  g_spr.tick();
+  Swi::vblankIntrWait();
+  g_snd.copy();
+}
+
+extern "C" int main() {
   Irq::init();
   Irq::vblank(irq_vblank);
 
@@ -32,18 +41,16 @@ extern "C" void gvmain() {
     .done();
   Reg::IME::set(1);
 
-  int vh = g_vramObj.alloc256(8, 8);
-  int oh = g_oam.alloc(0);
-
-  g_vramObj.copy(vh, dataSpritesheetsDigits8x8);
-  g_oam.show(oh, true).fromVramObj(oh, vh);
-
   memcpy32((void *)0x05000000, dataPalette, dataPaletteSize);
   memcpy32((void *)0x05000200, dataPalette, dataPaletteSize);
 
-  int x = 0;
+  *((volatile uint16_t *)0x05000000) = 0xf789;
+
+  g_snd.loadSong(0, dataSongsOutro, 0);
+
   for (;;) {
-    g_oam.x(oh, x++);
-    Swi::vblankIntrWait();
+    // game logic
+    nextframe();
   }
+  return 0;
 }
