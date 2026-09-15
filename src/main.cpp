@@ -5,7 +5,6 @@
 #include "data/spritesheets/digits.8x8.hpp"
 #include "data/animations.hpp"
 #include "data/songs/outro.hpp"
-#include "data/dpcm/DpcmTable.hpp"
 
 Oam g_oam;
 VramObj g_vramObj;

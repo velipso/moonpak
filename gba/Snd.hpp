@@ -1,4 +1,44 @@
 // SPDX-License-Identifier: 0BSD
+//
+// GBA sound engine based on wavetable synthesis, specifically targeting songs composed with
+// FamiStudio (https://famistudio.org/).
+//
+// Supports:
+//
+// 1. FamiStudio Text import with high compatibility
+// 2. Original NES voices (square, triangle, noise, DPCM)
+// 3. VRC6 expansion (additional square and saw channels)
+// 4. N163 expansion (custom wavetables) [not implemented yet -- planned]
+// 5. 32768hz sample rate (targeting same rate as GBA hardware)
+// 6. IM ADPCM compressed WAV files for use with sound effects and DPCM voice
+// 7. DPCM sample swapping, so higher quality WAV files can be used instead of crappy NES samples
+//
+// NOTE: some features may be missing, but they will be implemented (eventually :-P)
+//
+// Usage:
+//
+// // declare a global Snd object:
+// Snd snd(maxSongs, maxSfxs); // choose how many songs and sfxs slots you want; snd(2, 4) is good
+//
+// // after every vblank, run snd.copy():
+// Swi::vblankIntrWait();
+// snd.copy();
+//
+// // setting volume
+// snd.masterVolume = A; // 0-16 (or more, if you really want)
+// snd.songVolume = B;   // 0-16 (or more, if you really want)
+// snd.sfxVolume = C;    // 0-16 (or more, if you really want)
+// // if masterVolume is 0, then all processing is skipped (cart is not accessed)
+//
+// // playing songs:
+// snd.loadSong(0, dataSongsFoo, 0);
+// //           |  |             ^- which song in the file? files can contain multiple songs
+// //           |  +- binary data output from scripts/famistudio.ts
+// //           +- which song slot? 0...maxSongs-1
+//
+// // playing sound effects:
+// TODO: this
+//
 #pragma once
 #include <stdint.h>
 #include <stdlib.h>
