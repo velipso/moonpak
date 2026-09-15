@@ -250,6 +250,6 @@ interrupt_found:
 
     bx    lr
 
-    .align 4
+    .balign 4
     .pool
     .end

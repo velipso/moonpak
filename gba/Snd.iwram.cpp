@@ -2,17 +2,78 @@
 #include "Snd.iwram.hpp"
 #ifdef PLATFORM_GBA
 #include "gba/Reg.hpp"
+// on the GBA, we render at 12 bits per sample, so we have 4 bits headroom for clipping before
+// overflow wraps
+#define SAMPLE_SHIFT  12
+#define SAMPLE_SET(out, value)  *out++ = (value) >> SAMPLE_SHIFT
+#define SAMPLE_ADD(out, value)  *out++ += (value) >> SAMPLE_SHIFT
+#else
+// on the host, we render at 16 bits per sample, and check for clipping on every add (too expensive
+// on the GBA)
+#define SAMPLE_SHIFT  8
+#define SAMPLE_SET(out, value)  do {           \
+    int v = (value) >> SAMPLE_SHIFT;           \
+    if (v < -32768) v = -32768;                \
+    else if (v > 32767) v = 32767;             \
+    *out++ = v;                                \
+  } while (0)
+#define SAMPLE_ADD(out, value)  do {           \
+    int v = *out + ((value) >> SAMPLE_SHIFT);  \
+    if (v < -32768) v = -32768;                \
+    else if (v > 32767) v = 32767;             \
+    *out++ = v;                                \
+  } while (0)
 #endif
 
-static const int16_t adpcmStepSize[] = {
-  7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73,
-  80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494,
-  544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499,
-  2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487,
-  12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+struct AdpcmTable {
+  int value[89][16];
 };
 
-static const int8_t adpcmIndex[] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
+consteval AdpcmTable makeAdpcmTable() {
+  AdpcmTable table{};
+
+  constexpr int8_t indexDelta[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
+
+  constexpr int16_t stepSize[] = {
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73,
+    80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494,
+    544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499,
+    2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+    11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+  };
+
+  for (int index = 0; index < 89; index++) {
+    int step = stepSize[index];
+    for (int nibble = 0; nibble < 16; nibble++) {
+      int difference = step >> 3;
+      if (nibble & 4) difference += step;
+      if (nibble & 2) difference += step >> 1;
+      if (nibble & 1) difference += step >> 2;
+      if (nibble & 8) difference = -difference;
+      int nextIndex = index + indexDelta[nibble];
+      if (nextIndex < 0) nextIndex = 0;
+      else if (nextIndex > 88) nextIndex = 88;
+      // bits 0..7 = next index
+      // bits 15..31 = signed 17-bit difference
+      table.value[index][nibble] = (difference * 32768) + nextIndex;
+    }
+  }
+
+  return table;
+}
+
+static constexpr auto adpcmTable = makeAdpcmTable();
+
+#define ADPCM_DECODE(SETTER)  do {                \
+    int entry = adpcmTable.value[index][nibble];  \
+    int difference = entry >> 15;                 \
+    index = entry & 0x7f;                         \
+    sample += difference;                         \
+    if (sample > 32767) sample = 32767;           \
+    else if (sample < -32768) sample = -32768;    \
+    SETTER(out, sample * volume);                 \
+    samples--;                                    \
+  } while (0)
 
 void sndRenderAdpcmSet(
   int16_t *out,
@@ -25,34 +86,30 @@ void sndRenderAdpcmSet(
   int index = (*state >> 16) & 0x7f;
   bool secondHalf = *state & 0x00800000;
   const uint8_t *dataPtr = *data;
-  while (samples > 0) {
-    int nibble;
-    if (secondHalf) {
-      nibble = *dataPtr >> 4;
-      dataPtr++;
-    } else {
-      nibble = *dataPtr & 15;
-    }
-    secondHalf = !secondHalf;
 
-    int stepSize = adpcmStepSize[index];
-    index += adpcmIndex[nibble];
-    if (index < 0) index = 0;
-    else if (index > 88) index = 88;
-
-    int difference = 0;
-    if (nibble & 4) difference += stepSize;
-    if (nibble & 2) difference += stepSize >> 1;
-    if (nibble & 1) difference += stepSize >> 2;
-    difference += stepSize >> 3;
-    if (nibble & 8) difference = -difference;
-    sample += difference;
-    if (sample > 32767) sample = 32767;
-    else if (sample < -32768) sample = -32768;
-
-    *out++ = (sample * volume) >> 8; // SET
-    samples--;
+  // finish a byte left half-consumed by the previous call
+  if (secondHalf && samples > 0) {
+    int nibble = *dataPtr >> 4;
+    dataPtr++;
+    ADPCM_DECODE(SAMPLE_SET);
+    secondHalf = false;
   }
+
+  while (samples >= 2) {
+    int value = *dataPtr++;
+    int nibble = value & 15;
+    ADPCM_DECODE(SAMPLE_SET);
+    nibble = value >> 4;
+    ADPCM_DECODE(SAMPLE_SET);
+  }
+
+  // leave the high nibble pending if there's one sample left
+  if (samples > 0) {
+    int nibble = *dataPtr & 15;
+    ADPCM_DECODE(SAMPLE_SET);
+    secondHalf = true;
+  }
+
   *data = dataPtr;
   *state = (secondHalf ? 0x00800000 : 0) | (index << 16) | (sample & 0xffff);
 }
@@ -68,34 +125,30 @@ void sndRenderAdpcmAdd(
   int index = (*state >> 16) & 0x7f;
   bool secondHalf = *state & 0x00800000;
   const uint8_t *dataPtr = *data;
-  while (samples > 0) {
-    int nibble;
-    if (secondHalf) {
-      nibble = *dataPtr >> 4;
-      dataPtr++;
-    } else {
-      nibble = *dataPtr & 15;
-    }
-    secondHalf = !secondHalf;
 
-    int stepSize = adpcmStepSize[index];
-    index += adpcmIndex[nibble];
-    if (index < 0) index = 0;
-    else if (index > 88) index = 88;
-
-    int difference = 0;
-    if (nibble & 4) difference += stepSize;
-    if (nibble & 2) difference += stepSize >> 1;
-    if (nibble & 1) difference += stepSize >> 2;
-    difference += stepSize >> 3;
-    if (nibble & 8) difference = -difference;
-    sample += difference;
-    if (sample > 32767) sample = 32767;
-    else if (sample < -32768) sample = -32768;
-
-    *out++ += (sample * volume) >> 8; // ADD
-    samples--;
+  // finish a byte left half-consumed by the previous call
+  if (secondHalf && samples > 0) {
+    int nibble = *dataPtr >> 4;
+    dataPtr++;
+    ADPCM_DECODE(SAMPLE_ADD);
+    secondHalf = false;
   }
+
+  while (samples >= 2) {
+    int value = *dataPtr++;
+    int nibble = value & 15;
+    ADPCM_DECODE(SAMPLE_ADD);
+    nibble = value >> 4;
+    ADPCM_DECODE(SAMPLE_ADD);
+  }
+
+  // leave the high nibble pending if there's one sample left
+  if (samples > 0) {
+    int nibble = *dataPtr & 15;
+    ADPCM_DECODE(SAMPLE_ADD);
+    secondHalf = true;
+  }
+
   *data = dataPtr;
   *state = (secondHalf ? 0x00800000 : 0) | (index << 16) | (sample & 0xffff);
 }
@@ -110,16 +163,15 @@ void sndRenderWaveTableSet1024(
 ) {
   uint32_t p = *phase;
   while (samples > 0) {
-    out[0] = (volume * waveTable[p >> 22]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 22]);
     p += dphase;
-    out[1] = (volume * waveTable[p >> 22]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 22]);
     p += dphase;
-    out[2] = (volume * waveTable[p >> 22]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 22]);
     p += dphase;
-    out[3] = (volume * waveTable[p >> 22]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 22]);
     p += dphase;
     samples -= 4;
-    out += 4;
   }
   *phase = p;
 }
@@ -134,16 +186,15 @@ void sndRenderWaveTableAdd1024(
 ) {
   uint32_t p = *phase;
   while (samples > 0) {
-    out[0] += (volume * waveTable[p >> 22]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 22]);
     p += dphase;
-    out[1] += (volume * waveTable[p >> 22]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 22]);
     p += dphase;
-    out[2] += (volume * waveTable[p >> 22]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 22]);
     p += dphase;
-    out[3] += (volume * waveTable[p >> 22]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 22]);
     p += dphase;
     samples -= 4;
-    out += 4;
   }
   *phase = p;
 }
@@ -158,16 +209,15 @@ void sndRenderWaveTableSet512(
 ) {
   uint32_t p = *phase;
   while (samples > 0) {
-    out[0] = (volume * waveTable[p >> 23]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 23]);
     p += dphase;
-    out[1] = (volume * waveTable[p >> 23]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 23]);
     p += dphase;
-    out[2] = (volume * waveTable[p >> 23]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 23]);
     p += dphase;
-    out[3] = (volume * waveTable[p >> 23]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 23]);
     p += dphase;
     samples -= 4;
-    out += 4;
   }
   *phase = p;
 }
@@ -182,16 +232,15 @@ void sndRenderWaveTableAdd512(
 ) {
   uint32_t p = *phase;
   while (samples > 0) {
-    out[0] += (volume * waveTable[p >> 23]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 23]);
     p += dphase;
-    out[1] += (volume * waveTable[p >> 23]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 23]);
     p += dphase;
-    out[2] += (volume * waveTable[p >> 23]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 23]);
     p += dphase;
-    out[3] += (volume * waveTable[p >> 23]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 23]);
     p += dphase;
     samples -= 4;
-    out += 4;
   }
   *phase = p;
 }
@@ -206,16 +255,15 @@ void sndRenderWaveTableSet256(
 ) {
   uint32_t p = *phase;
   while (samples > 0) {
-    out[0] = (volume * waveTable[p >> 24]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 24]);
     p += dphase;
-    out[1] = (volume * waveTable[p >> 24]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 24]);
     p += dphase;
-    out[2] = (volume * waveTable[p >> 24]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 24]);
     p += dphase;
-    out[3] = (volume * waveTable[p >> 24]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 24]);
     p += dphase;
     samples -= 4;
-    out += 4;
   }
   *phase = p;
 }
@@ -230,16 +278,15 @@ void sndRenderWaveTableAdd256(
 ) {
   uint32_t p = *phase;
   while (samples > 0) {
-    out[0] += (volume * waveTable[p >> 24]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 24]);
     p += dphase;
-    out[1] += (volume * waveTable[p >> 24]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 24]);
     p += dphase;
-    out[2] += (volume * waveTable[p >> 24]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 24]);
     p += dphase;
-    out[3] += (volume * waveTable[p >> 24]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 24]);
     p += dphase;
     samples -= 4;
-    out += 4;
   }
   *phase = p;
 }
@@ -254,16 +301,15 @@ void sndRenderWaveTableSet128(
 ) {
   uint32_t p = *phase;
   while (samples > 0) {
-    out[0] = (volume * waveTable[p >> 25]) >> 8; // SET
+    SAMPLE_SET(out, volume * waveTable[p >> 25]);
     p += dphase;
-    out[1] = (volume * waveTable[p >> 25]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 25]);
     p += dphase;
-    out[2] = (volume * waveTable[p >> 25]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 25]);
     p += dphase;
-    out[3] = (volume * waveTable[p >> 25]) >> 8;
+    SAMPLE_SET(out, volume * waveTable[p >> 25]);
     p += dphase;
     samples -= 4;
-    out += 4;
   }
   *phase = p;
 }
@@ -278,21 +324,20 @@ void sndRenderWaveTableAdd128(
 ) {
   uint32_t p = *phase;
   while (samples > 0) {
-    out[0] += (volume * waveTable[p >> 25]) >> 8; // ADD
+    SAMPLE_ADD(out, volume * waveTable[p >> 25]);
     p += dphase;
-    out[1] += (volume * waveTable[p >> 25]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 25]);
     p += dphase;
-    out[2] += (volume * waveTable[p >> 25]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 25]);
     p += dphase;
-    out[3] += (volume * waveTable[p >> 25]) >> 8;
+    SAMPLE_ADD(out, volume * waveTable[p >> 25]);
     p += dphase;
     samples -= 4;
-    out += 4;
   }
   *phase = p;
 }
 
-// TODO: #ifdef PLATFORM_HOST
+#ifdef PLATFORM_HOST
 extern "C" void sndRenderNoiseSet(
   int16_t *out,
   uint32_t samples,
@@ -313,16 +358,15 @@ extern "C" void sndRenderNoiseSet(
       }                                           \
     } while (0)
   while (samples > 0) {
-    out[0] = (volume * (((int32_t)s) >> 16)) >> 8; // SET
+    SAMPLE_SET(out, volume * (((int32_t)s) >> 16));
     STEP();
-    out[1] = (volume * (((int32_t)s) >> 16)) >> 8;
+    SAMPLE_SET(out, volume * (((int32_t)s) >> 16));
     STEP();
-    out[2] = (volume * (((int32_t)s) >> 16)) >> 8;
+    SAMPLE_SET(out, volume * (((int32_t)s) >> 16));
     STEP();
-    out[3] = (volume * (((int32_t)s) >> 16)) >> 8;
+    SAMPLE_SET(out, volume * (((int32_t)s) >> 16));
     STEP();
     samples -= 4;
-    out += 4;
   }
   #undef STEP
   *phase = p;
@@ -347,25 +391,24 @@ extern "C" void sndRenderNoiseAdd(
       }                                           \
     } while (0)
   while (samples > 0) {
-    out[0] += (volume * (((int32_t)s) >> 16)) >> 8; // ADD
+    SAMPLE_ADD(out, volume * (((int32_t)s) >> 16));
     STEP();
-    out[1] += (volume * (((int32_t)s) >> 16)) >> 8;
+    SAMPLE_ADD(out, volume * (((int32_t)s) >> 16));
     STEP();
-    out[2] += (volume * (((int32_t)s) >> 16)) >> 8;
+    SAMPLE_ADD(out, volume * (((int32_t)s) >> 16));
     STEP();
-    out[3] += (volume * (((int32_t)s) >> 16)) >> 8;
+    SAMPLE_ADD(out, volume * (((int32_t)s) >> 16));
     STEP();
     samples -= 4;
-    out += 4;
   }
   #undef STEP
   *phase = p;
   *state = s;
 }
-// TODO: #endif
+#endif
 
-int Snd::tick() {
-  int samples = sndSampleCountPerFrame(frameCount++);
+uint32_t Snd::tick() {
+  uint32_t samples = sndSampleCountPerFrame(frameCount++);
   bool first = true;
   if (masterVolume > 0) {
     for (int i = 0; i < maxSongs; i++) {
@@ -383,7 +426,7 @@ int Snd::tick() {
   }
   if (first) {
     // nothing was rendered into the buffer, so we need to clear it
-    for (int i = 0; i < samples; i++) {
+    for (uint32_t i = 0; i < samples; i++) {
       bufferTemp[i] = 0;
     }
   }
@@ -391,6 +434,18 @@ int Snd::tick() {
 }
 
 #ifdef PLATFORM_GBA
+#if 1
+// use assembly version
+extern "C" void sndQuantize8(int8_t *bufferDMA, uint32_t samples, int16_t *bufferTemp);
+#else
+static inline void sndQuantize8CPP(int8_t *bufferDMA, uint32_t samples, int16_t *bufferTemp) {
+  while (samples-- > 0) {
+    int sample = (*bufferTemp++) >> (16 - SAMPLE_SHIFT);
+    *bufferDMA++ = sample < -128 ? -128 : sample > 127 ? 127 : sample;
+  }
+}
+#endif
+
 void Snd::copy() {
   if (bufferState == 0xff) {
     // if we haven't initialized yet, then spend this frame initializing and letting the DMA get
@@ -398,16 +453,15 @@ void Snd::copy() {
     init();
     return;
   }
-  int samples = tick();
+  uint32_t samples = tick();
   int16_t *read = bufferTemp;
   while (samples > 0) {
-    int write = sizeof(bufferDMA) - bufferIndex;
+    uint32_t write = sizeof(bufferDMA) - bufferIndex;
     if (write > samples) write = samples;
     samples -= write;
-    while (write-- > 0) {
-      int sample = (*read++) >> 8;
-      bufferDMA[bufferIndex++] = sample < -128 ? -128 : sample > 127 ? 127 : sample;
-    }
+    sndQuantize8(&bufferDMA[bufferIndex], write, read);
+    read += write;
+    bufferIndex += write;
     if (bufferIndex >= sizeof(bufferDMA)) {
       bufferIndex -= sizeof(bufferDMA);
     }

@@ -110,6 +110,7 @@ struct SndPCM {
   SndPCM() { reset(); }
   void reset() { samplesLeft = 0; }
   bool isEnabled() { return samplesLeft > 0; }
+  bool loadWav(const uint8_t *data, uint32_t size);
   bool render(int16_t *out, uint32_t samples, int songVolume, bool first);
 };
 
@@ -172,7 +173,7 @@ struct Snd {
     return songs[targetIndex].song->loopChannelsLength >= 0;
   }
   bool isSongDone(int targetIndex) { return songs[targetIndex].isDone(); }
-  int tick(); // returns how many samples were written
+  uint32_t tick(); // returns how many samples were written
 
 #ifdef PLATFORM_GBA
   void init();

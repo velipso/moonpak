@@ -36,5 +36,5 @@ atomicBitClear: // (uint32_t *addr, uint32_t mask)
 1:  msr   cpsr_c, r2
     mov   r0, #0
     bx    lr
-    .align 4
+    .balign 4
     .end

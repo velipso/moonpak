@@ -137,6 +137,6 @@ memset8:
     strb  r1, [r0], #1
     b     memset8
 
-    .align 4
+    .balign 4
     .pool
     .end

@@ -1313,6 +1313,8 @@ function convertDpcmSampleBlock(
       '-c:a', 'adpcm_ima_wav',
       '-block_size', `${blockSize}`,
       '-ar', '32768',
+      '-fflags', '+bitexact',
+      '-flags:a', '+bitexact',
       '-y',
       output,
     ], {

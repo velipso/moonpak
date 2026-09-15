@@ -52,6 +52,6 @@ irq_init:
 
     bx    lr
 
-    .align 4
+    .balign 4
     .pool
     .end

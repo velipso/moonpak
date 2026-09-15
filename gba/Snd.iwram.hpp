@@ -113,7 +113,7 @@ static inline int16_t sndAdpcmFirstSample(int state) {
   return (int16_t)(state & 0xffff);
 }
 
-static inline int sndSampleCountPerFrame(int frame) {
+static inline uint32_t sndSampleCountPerFrame(int frame) {
   // sample rate is 32768 samples/sec, or 1 sample every 512 cycles, so target samples per frame:
   // 280896 cycles per frame / 512 cycles per sample = 548.625 samples per frame
   // this is spread over 32 frames, most frames having 548 samples, but some having 552 samples:

@@ -57,8 +57,12 @@ SECTIONS
 
     .text : ALIGN(4)
     {
-        *(.text)
-        *(.text*)
+        /*
+         * Leave code from *.iwram.* and *.ewram.* object files unclaimed
+         * here. Their .text* sections are collected by the dedicated
+         * .iwram/.ewram output sections below.
+         */
+        *(EXCLUDE_FILE (*iwram.* *ewram.*) .text*)
         *(.gnu.linkonce.t.*) /* Used for vague linking */
 
         /* ARM/Thumb interworking code */
