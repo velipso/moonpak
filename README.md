@@ -1,4 +1,6 @@
-Over the Moon
-=============
+MoonPak
+=======
 
-_Over the Moon_ is a demo project for the Game Boy Advance.
+MoonPak is a C++ game-development framework for the Game Boy Advance.
+
+WIP :-)
