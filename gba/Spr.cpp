@@ -7,7 +7,6 @@
 #include <stdlib.h>
 
 #ifdef TESTS
-#include <random>
 #include <stdio.h>
 static bool g_verbose;
 static bool g_doubleFree;
@@ -910,13 +909,6 @@ next_entity:;
 }
 
 #ifdef TESTS
-static std::mt19937 rng(std::random_device{}());
-
-static int rand(int size) {
-  if (size <= 1) return 0;
-  return std::uniform_int_distribution<int>(0, size - 1)(rng);
-}
-
 int Spr::test(bool verbose) {
   g_verbose = verbose;
   Oam oam;
