@@ -13,6 +13,7 @@ Snd g_snd(2, 4);
 
 static void irq_vblank() {
   Inp::update();
+  Rnd::update();
   g_oam.copy();
   g_spr.copy();
 }
