@@ -3,6 +3,7 @@
 
 #include "moonpak/Inp.hpp"
 #include "moonpak/Irq.hpp"
+#include "moonpak/log.hpp"
 #include "moonpak/mem.hpp"
 #include "moonpak/Oam.hpp"
 #include "moonpak/Reg.hpp"

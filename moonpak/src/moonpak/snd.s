@@ -24,7 +24,7 @@ sndRenderNoiseSet:
 1:
     mov     r9, r5, asr #16    // r9 = s >> 16
     mul     r12, r9, r2        // r12 = r9 * r2 (volume)
-    mov     r12, r12, asr #12  // r12 >>= 12 (shift 8 on host, shift 12 on GBA for more headroom)
+    mov     r12, r12, asr #12  // r12 >>= 12 (MOONPAK_SAMPLE_SHIFT)
     strh    r12, [r0], #2      // *out++ = r12
     NOISE_STEP
 
@@ -54,7 +54,7 @@ sndRenderNoiseAdd:
 1:
     mov     r9, r5, asr #16    // r9 = s >> 16
     mul     r12, r9, r2        // r12 = r9 * r2 (volume)
-    mov     r12, r12, asr #12  // r12 >>= 12 (shift 8 on host, shift 12 on GBA for more headroom)
+    mov     r12, r12, asr #12  // r12 >>= 12 (MOONPAK_SAMPLE_SHIFT)
     ldrsh   r9, [r0]           // r9 = *out
     add     r12, r12, r9       // r12 += r9
     strh    r12, [r0], #2      // *out++ = r12
@@ -83,7 +83,7 @@ sndQuantize8:
     mov     r4, #0x7f
 1:
     ldrsh   r3, [r2], #2      // sample = *bufferTemp++
-    mov     r3, r3, asr #4    // 12-bit -> 8-bit
+    mov     r3, r3, asr #4    // 12-bit -> 8-bit (MOONPAK_SAMPLE_SHIFT - 8)
 
     @ clamp r3 to -128..127 (magic)
     mov     r12, r3, lsl #24

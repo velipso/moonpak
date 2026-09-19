@@ -63,7 +63,9 @@ const uint8_t testSong[] = {
 static bool g_verbose;
 #define log(fmt, ...) if (g_verbose) printf(fmt, ##__VA_ARGS__)
 #else
+#ifdef PLATFORM_GBA
 #include "data/dpcm/DpcmTable.hpp"
+#endif
 #define log(fmt, ...)
 #endif
 
@@ -286,7 +288,7 @@ bool SndPCM::render(int16_t *out, uint32_t samples, int pcmVolume, bool first) {
         blockData += 4;
         blockLeft = blockSize;
         int16_t s = sndAdpcmFirstSample(state);
-        *out++ = (s * volume) >> 8; // SET
+        *out++ = (s * volume) >> MOONPAK_SAMPLE_SHIFT; // SET
         renderLeft--;
       } else {
         int amount = blockLeft < renderLeft ? blockLeft : renderLeft;
@@ -309,7 +311,7 @@ bool SndPCM::render(int16_t *out, uint32_t samples, int pcmVolume, bool first) {
         blockData += 4;
         blockLeft = blockSize;
         int16_t s = sndAdpcmFirstSample(state);
-        *out++ += (s * volume) >> 8; // ADD
+        *out++ += (s * volume) >> MOONPAK_SAMPLE_SHIFT; // ADD
         renderLeft--;
       } else {
         int amount = blockLeft < renderLeft ? blockLeft : renderLeft;
@@ -617,6 +619,28 @@ Snd &Snd::loadSong(int targetIndex, const uint8_t *data, int songIndex) {
   SndSong &sndSong = songs[targetIndex];
   sndSong.loadSong(&header, &song);
   return *this;
+}
+
+bool Snd::playSfx(const uint8_t *data, uint32_t size, int16_t priority) {
+  // first, search for empty slots
+  int ii = -1;
+  for (int i = 0; i < maxSfxs; i++) {
+    if (!sfxs[i].isEnabled()) {
+      sfxs[i].priority = priority;
+      sfxs[i].loadWav(data, size);
+      return true;
+    }
+    if (ii < 0 || sfxs[i].priority > sfxs[ii].priority) {
+      ii = i;
+    }
+  }
+  // second, kick out a sound if possible
+  if (ii >= 0 && sfxs[ii].priority >= priority) {
+    sfxs[ii].priority = priority;
+    sfxs[ii].loadWav(data, size);
+    return true;
+  }
+  return false;
 }
 
 #ifdef TESTS

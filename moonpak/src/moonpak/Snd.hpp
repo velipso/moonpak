@@ -37,11 +37,23 @@
 // //           +- which song slot? 0...maxSongs-1
 //
 // // playing sound effects:
-// TODO: this
+// #include "data/sfxs/Sfx.hpp"
+// snd.playSfx(Sfx::foo, Sfx::fooSize, priority);
+// // where lower `priority` values can override higher `priority` values if needed
 //
 #pragma once
 #include <stdint.h>
 #include <stdlib.h>
+
+#ifdef PLATFORM_GBA
+// on the GBA, we render at 12 bits per sample, so we have 4 bits headroom for clipping before
+// overflow wraps
+#define MOONPAK_SAMPLE_SHIFT  12
+#else
+// on the host, we render at 16 bits per sample, and check for clipping on every add (too expensive
+// on the GBA)
+#define MOONPAK_SAMPLE_SHIFT  8
+#endif
 
 struct FamiHeader {
   uint32_t magic;
@@ -186,8 +198,8 @@ struct Snd {
   SndPCM *sfxs;
   uint8_t frameCount;
   int8_t masterVolume; // 0-16
-  int8_t sfxVolume; // 0-16
-  int8_t songVolume; // 0-16
+  int8_t sfxVolume;    // 0-16
+  int8_t songVolume;   // 0-16
   uint8_t maxSongs;
   uint8_t maxSfxs;
 
@@ -213,6 +225,7 @@ struct Snd {
     return songs[targetIndex].song->loopChannelsLength >= 0;
   }
   bool isSongDone(int targetIndex) { return songs[targetIndex].isDone(); }
+  bool playSfx(const uint8_t *data, uint32_t size, int16_t priority);
   uint32_t tick(); // returns how many samples were written
 
 #ifdef PLATFORM_GBA

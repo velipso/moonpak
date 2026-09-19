@@ -3,11 +3,14 @@
 #include "CmdCopyTiles256.hpp"
 #include "CmdGbaFix.hpp"
 #include "CmdPalette256.hpp"
+#include "CmdSongToWav.hpp"
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
+#define JSON_IMPLEMENTATION
 extern "C" {
   #include "stb_image.h"
   #include "stb_image_write.h"
+  #include "json.h"
 }
 #include <stdio.h>
 #include <string.h>
@@ -15,10 +18,12 @@ extern "C" {
 static CmdCopyTiles256 cmdCopyTiles256;
 static CmdGbaFix cmdGbaFix;
 static CmdPalette256 cmdPalette256;
+static CmdSongToWav cmdSongToWav;
 static Command *commands[] = {
   &cmdCopyTiles256,
   &cmdGbaFix,
   &cmdPalette256,
+  &cmdSongToWav,
   NULL
 };
 

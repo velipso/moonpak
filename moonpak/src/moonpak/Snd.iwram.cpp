@@ -2,26 +2,22 @@
 #include "moonpak/Snd.iwram.hpp"
 #ifdef PLATFORM_GBA
 #include "moonpak/Reg.hpp"
-// on the GBA, we render at 12 bits per sample, so we have 4 bits headroom for clipping before
-// overflow wraps
-#define SAMPLE_SHIFT  12
-#define SAMPLE_SET(out, value)  *out++ = (value) >> SAMPLE_SHIFT
-#define SAMPLE_ADD(out, value)  *out++ += (value) >> SAMPLE_SHIFT
+// on GBA, just set/add the sample directly (fast)
+#define SAMPLE_SET(out, value)  *out++ = (value) >> MOONPAK_SAMPLE_SHIFT
+#define SAMPLE_ADD(out, value)  *out++ += (value) >> MOONPAK_SAMPLE_SHIFT
 #else
-// on the host, we render at 16 bits per sample, and check for clipping on every add (too expensive
-// on the GBA)
-#define SAMPLE_SHIFT  8
-#define SAMPLE_SET(out, value)  do {           \
-    int v = (value) >> SAMPLE_SHIFT;           \
-    if (v < -32768) v = -32768;                \
-    else if (v > 32767) v = 32767;             \
-    *out++ = v;                                \
+// on host, clamp every sample
+#define SAMPLE_SET(out, value)  do {                   \
+    int v = (value) >> MOONPAK_SAMPLE_SHIFT;           \
+    if (v < -32768) v = -32768;                        \
+    else if (v > 32767) v = 32767;                     \
+    *out++ = v;                                        \
   } while (0)
-#define SAMPLE_ADD(out, value)  do {           \
-    int v = *out + ((value) >> SAMPLE_SHIFT);  \
-    if (v < -32768) v = -32768;                \
-    else if (v > 32767) v = 32767;             \
-    *out++ = v;                                \
+#define SAMPLE_ADD(out, value)  do {                   \
+    int v = *out + ((value) >> MOONPAK_SAMPLE_SHIFT);  \
+    if (v < -32768) v = -32768;                        \
+    else if (v > 32767) v = 32767;                     \
+    *out++ = v;                                        \
   } while (0)
 #endif
 

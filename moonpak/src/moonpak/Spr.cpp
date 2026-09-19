@@ -10,7 +10,7 @@
 #include <stdio.h>
 static bool g_verbose;
 static bool g_doubleFree;
-#define log(fmt, ...) if (g_verbose) printf(fmt, ##__VA_ARGS__)
+#define log(fmt, ...) if (g_verbose) printf(fmt "\n", ##__VA_ARGS__)
 
 // dummy animation data for tests
 struct SprEntryData;
@@ -33,7 +33,7 @@ namespace Anim {
 }
 #else
 #include "data/animations.hpp"
-#define log(fmt, ...)
+#include "moonpak/log.hpp"
 #endif
 
 static inline u8 sprRand(Spr *spr) {
@@ -588,6 +588,7 @@ Spr &Spr::tick() {
                   break;
                 case 0x6: // WAIT
                   e.wait(param);
+                  e.pc(e.pc() + 1);
                   goto flush_entity;
                 case 0x7: // REPEAT
                   e.repeat(clampU8(e.repeat() + param + 1));

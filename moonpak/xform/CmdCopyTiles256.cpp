@@ -83,7 +83,7 @@ static int copyTiles256(
             b >>= 3;
             u16 rgb = r | (g << 5) | (b << 10);
             bool found = false;
-            for (int i = 0; i < paletteSize; i++) {
+            for (int i = 1; i < paletteSize; i++) {
               if (palette[i] == rgb) {
                 c = i;
                 found = true;

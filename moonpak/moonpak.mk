@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: 0BSD
 
-MOONPAK_DIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+#
+# Default options
+#
 
 ARM_CC          ?= arm-none-eabi-gcc
 ARM_CXX         ?= arm-none-eabi-g++
@@ -12,6 +14,12 @@ NODE            ?= node
 CFLAGS          ?= -Wall -O3
 CXXFLAGS        ?= -Wall -O3
 
+#
+# Directories and targets
+#
+
+MOONPAK_DIR     := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+
 M_SCRIPTS_DIR   := $(MOONPAK_DIR)/scripts
 M_SRC_DIR       := $(MOONPAK_DIR)/src
 M_TESTS_DIR     := $(MOONPAK_DIR)/tests
@@ -20,6 +28,7 @@ M_XFORM_DIR     := $(MOONPAK_DIR)/xform
 
 SCRIPT_EMBED    := $(M_SCRIPTS_DIR)/embed.ts
 SCRIPT_FAMI     := $(M_SCRIPTS_DIR)/famistudio.ts
+SCRIPT_SFXS     := $(M_SCRIPTS_DIR)/sfxs.ts
 SCRIPT_TYPELIB  := $(M_SCRIPTS_DIR)/typelib.ts
 
 project-dir      = $(if $(filter .,$(PROJECT_DIR)),$(1),$(PROJECT_DIR)/$(1))
@@ -30,21 +39,25 @@ P_TESTS_DIR     := $(call project-dir,tests)
 P_TYPES_DIR     := $(call project-dir,types)
 
 D_DPCM_DIR      := $(P_DATA_DIR)/dpcm
+D_SFXS_DIR      := $(P_DATA_DIR)/sfxs
 D_SONGS_DIR     := $(P_DATA_DIR)/songs
 D_SPSH_DIR      := $(P_DATA_DIR)/spritesheets
+D_TLSH_DIR      := $(P_DATA_DIR)/tilesheets
 
 B_COMMON_DIR    := $(P_BUILD_DIR)/common
 B_GBA_DIR       := $(P_BUILD_DIR)/gba
 B_TESTS_DIR     := $(P_BUILD_DIR)/tests
 B_XFORM_DIR     := $(P_BUILD_DIR)/xform
 
-BCM_TYPES_DIR   := $(B_COMMON_DIR)/moonpak/types
-BCP_TYPES_DIR   := $(B_COMMON_DIR)/types
-BCP_DATA_DIR    := $(B_COMMON_DIR)/data
+BM_TYPES_DIR    := $(B_COMMON_DIR)/moonpak/types
+BP_TYPES_DIR    := $(B_COMMON_DIR)/types
+B_DATA_DIR      := $(B_COMMON_DIR)/data
 
-BCPD_DPCM_DIR   := $(BCP_DATA_DIR)/dpcm
-BCPD_SONGS_DIR  := $(BCP_DATA_DIR)/songs
-BCPD_SPSH_DIR   := $(BCP_DATA_DIR)/spritesheets
+B_DPCM_DIR      := $(B_DATA_DIR)/dpcm
+B_SFXS_DIR      := $(B_DATA_DIR)/sfxs
+B_SONGS_DIR     := $(B_DATA_DIR)/songs
+B_SPSH_DIR      := $(B_DATA_DIR)/spritesheets
+B_TLSH_DIR      := $(B_DATA_DIR)/tilesheets
 
 BG_COMMON_DIR   := $(B_GBA_DIR)/common
 BG_PROJECT_DIR  := $(B_GBA_DIR)/project
@@ -57,7 +70,9 @@ GBA_MAP         := $(P_BUILD_DIR)/$(NAME).map
 TESTS           := $(P_BUILD_DIR)/tests/tests
 XFORM           := $(P_BUILD_DIR)/xform/xform
 
-# -----
+#
+# C++ flags for `tests`
+#
 
 TESTS_CXXFLAGS     :=         \
 	-std=gnu++20                \
@@ -72,18 +87,21 @@ TESTS_CXXFLAGS     :=         \
 	$(addprefix -D,$(DEFINES))  \
 	$(addprefix -I,$(INCLUDES))
 
-# -----
+#
+# C++ flags for `xform`
+#
 
-XFORM_CPPFLAGS     :=         \
+XFORM_CXXFLAGS     :=         \
 	-std=gnu++20                \
 	-Wall                       \
 	-Wno-unused-function        \
 	-O3                         \
 	-DXFORM                     \
 	-DPLATFORM_HOST             \
+	-I$(M_SRC_DIR)              \
 	-I$(M_XFORM_DIR)
 
-# -----
+# Flags for GBA build
 
 ARM_COMMON_FLAGS   :=         \
 	-mcpu=arm7tdmi              \
@@ -129,7 +147,9 @@ ARM_LDFLAGS        :=         \
 	$(ARM_COMMON_FLAGS)         \
 	$(LDFLAGS)
 
-# -----
+#
+# Make targets
+#
 
 .PHONY: all clean dump tests test test-v xform dpcm-export dpcm-export-overwrite
 .DEFAULT_GOAL := all
@@ -152,7 +172,9 @@ clean:
 
 dump: $(GBA_DUMP)
 
-# -----
+#
+# Build for `tests`
+#
 
 TESTS_CPP       := $(shell find $(M_TESTS_DIR) -type f -name '*.cpp')
 TESTS_OBJS      := $(patsubst $(M_TESTS_DIR)/%.cpp,$(B_TESTS_DIR)/%.cpp.o,$(TESTS_CPP))
@@ -165,7 +187,9 @@ $(B_TESTS_DIR)/%.cpp.o: $(M_TESTS_DIR)/%.cpp
 $(TESTS): $(TESTS_OBJS)
 	$(CXX) -o $@ $(TESTS_OBJS)
 
-# -----
+#
+# Build for `xform`
+#
 
 XFORM_CPP       := $(shell find $(M_XFORM_DIR) -type f -name '*.cpp')
 XFORM_OBJS      := $(patsubst $(M_XFORM_DIR)/%.cpp,$(B_XFORM_DIR)/%.cpp.o,$(XFORM_CPP))
@@ -173,12 +197,14 @@ XFORM_DEPS      := $(XFORM_OBJS:.o=.d)
 
 $(B_XFORM_DIR)/%.cpp.o: $(M_XFORM_DIR)/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(XFORM_CPPFLAGS) -MMD -MP -c -o $@ $<
+	$(CXX) $(XFORM_CXXFLAGS) -MMD -MP -c -o $@ $<
 
 $(XFORM): $(XFORM_OBJS)
 	$(CXX) -o $@ $(XFORM_OBJS)
 
-# -----
+#
+# TypeLib library file generation
+#
 
 TYPELIB_HPP     := $(B_COMMON_DIR)/typelib.hpp
 TYPELIB_CPP     := $(B_COMMON_DIR)/typelib.cpp
@@ -190,61 +216,82 @@ $(TYPELIB_HPP) $(TYPELIB_CPP) $(TYPELIB_JS): $(SCRIPT_TYPELIB)
 	@mkdir -p $(@D)
 	$(NODE) $(SCRIPT_TYPELIB) -s $@
 
-# -----
+#
+# MoonPak types/* generation
+#
 
 M_TYPES         := $(shell find $(M_TYPES_DIR) -type f -name '*.type')
-M_TYPE_HPP      := $(patsubst $(M_TYPES_DIR)/%.type,$(BCM_TYPES_DIR)/%.hpp,$(M_TYPES))
-M_TYPE_CPP      := $(patsubst $(M_TYPES_DIR)/%.type,$(BCM_TYPES_DIR)/%.cpp,$(M_TYPES))
-M_TYPE_JS       := $(patsubst $(M_TYPES_DIR)/%.type,$(BCM_TYPES_DIR)/%.js,$(M_TYPES))
+M_TYPE_HPP      := $(patsubst $(M_TYPES_DIR)/%.type,$(BM_TYPES_DIR)/%.hpp,$(M_TYPES))
+M_TYPE_CPP      := $(patsubst $(M_TYPES_DIR)/%.type,$(BM_TYPES_DIR)/%.cpp,$(M_TYPES))
+M_TYPE_JS       := $(patsubst $(M_TYPES_DIR)/%.type,$(BM_TYPES_DIR)/%.js,$(M_TYPES))
 COMMON_HPP      += $(M_TYPE_HPP)
 COMMON_CPP      += $(M_TYPE_CPP)
 
-$(BCM_TYPES_DIR)/%.cpp: $(M_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
+$(BM_TYPES_DIR)/%.cpp: $(M_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
 	@mkdir -p $(@D)
 	$(NODE) $(SCRIPT_TYPELIB) -i $< -o $@
 
-$(BCM_TYPES_DIR)/%.hpp: $(M_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
+$(BM_TYPES_DIR)/%.hpp: $(M_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
 	@mkdir -p $(@D)
 	$(NODE) $(SCRIPT_TYPELIB) -i $< -o $@
 
-$(BCM_TYPES_DIR)/%.js: $(M_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
+$(BM_TYPES_DIR)/%.js: $(M_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
 	@mkdir -p $(@D)
 	$(NODE) $(SCRIPT_TYPELIB) -i $< -o $@
 
-# -----
+#
+# Project types/* generation
+#
 
 P_TYPES         := $(shell find $(P_TYPES_DIR) -type f -name '*.type')
-P_TYPE_HPP      := $(patsubst $(P_TYPES_DIR)/%.type,$(BCP_TYPES_DIR)/%.hpp,$(P_TYPES))
-P_TYPE_CPP      := $(patsubst $(P_TYPES_DIR)/%.type,$(BCP_TYPES_DIR)/%.cpp,$(P_TYPES))
-P_TYPE_JS       := $(patsubst $(P_TYPES_DIR)/%.type,$(BCP_TYPES_DIR)/%.js,$(P_TYPES))
+P_TYPE_HPP      := $(patsubst $(P_TYPES_DIR)/%.type,$(BP_TYPES_DIR)/%.hpp,$(P_TYPES))
+P_TYPE_CPP      := $(patsubst $(P_TYPES_DIR)/%.type,$(BP_TYPES_DIR)/%.cpp,$(P_TYPES))
+P_TYPE_JS       := $(patsubst $(P_TYPES_DIR)/%.type,$(BP_TYPES_DIR)/%.js,$(P_TYPES))
 COMMON_HPP      += $(P_TYPE_HPP)
 COMMON_CPP      += $(P_TYPE_CPP)
 
-$(BCP_TYPES_DIR)/%.cpp: $(P_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
+$(BP_TYPES_DIR)/%.cpp: $(P_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
 	@mkdir -p $(@D)
 	$(NODE) $(SCRIPT_TYPELIB) -i $< -o $@
 
-$(BCP_TYPES_DIR)/%.hpp: $(P_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
+$(BP_TYPES_DIR)/%.hpp: $(P_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
 	@mkdir -p $(@D)
 	$(NODE) $(SCRIPT_TYPELIB) -i $< -o $@
 
-$(BCP_TYPES_DIR)/%.js: $(P_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
+$(BP_TYPES_DIR)/%.js: $(P_TYPES_DIR)/%.type $(SCRIPT_TYPELIB)
 	@mkdir -p $(@D)
 	$(NODE) $(SCRIPT_TYPELIB) -i $< -o $@
 
-# -----
+#
+# Sfxs generation
+#
+
+SFXS_WAV        := $(shell find $(D_SFXS_DIR) -type f -name '*.wav')
+SFXS_HPP        := $(B_SFXS_DIR)/Sfx.hpp
+SFXS_CPP        := $(B_SFXS_DIR)/Sfx.cpp
+COMMON_HPP      += $(SFXS_HPP)
+COMMON_CPP      += $(SFXS_CPP)
+
+$(SFXS_HPP) $(SFXS_CPP): $(SFXS_WAV) $(SCRIPT_SFXS)
+	@mkdir -p $(@D)
+	$(NODE) $(SCRIPT_SFXS) -o $(B_SFXS_DIR) $(D_SFXS_DIR)
+
+#
+# Palette generation
+#
 
 # TODO: separate palettes for obj/bg?
 # TODO: user can provide .png files too?
 
-PALETTE_BIN     := $(BCP_DATA_DIR)/palette.bin
+PALETTE_BIN     := $(B_DATA_DIR)/palette.bin
 PALETTE_HPP     := $(PALETTE_BIN:.bin=.hpp)
 PALETTE_CPP     := $(PALETTE_BIN:.bin=.cpp)
 COMMON_HPP      += $(PALETTE_HPP)
 COMMON_CPP      += $(PALETTE_CPP)
 
 PALETTE_PNGS    := \
-	$(shell find $(D_SPSH_DIR) -type f -name '*.png')
+	$(shell find $(D_SPSH_DIR) -type f -name '*.png') \
+	$(shell find $(D_TLSH_DIR) -type f -name '*.png')
 
 $(PALETTE_BIN): $(PALETTE_PNGS) $(XFORM)
 	@mkdir -p $(@D)
@@ -254,32 +301,59 @@ $(PALETTE_HPP) $(PALETTE_CPP): $(SCRIPT_EMBED)
 	@mkdir -p $(@D)
 	$(NODE) $(SCRIPT_EMBED) -o $(PALETTE_HPP) -o $(PALETTE_CPP) -n $(B_COMMON_DIR) $(PALETTE_BIN)
 
-# -----
+#
+# Spritesheets generation
+#
 
 SPSH_PNG        := $(shell find $(D_SPSH_DIR) -type f -name '*.png')
-SPSH_BIN        := $(patsubst $(D_SPSH_DIR)/%.png,$(BCPD_SPSH_DIR)/%.bin,$(SPSH_PNG))
-SPSH_HPP        := $(patsubst $(D_SPSH_DIR)/%.png,$(BCPD_SPSH_DIR)/%.hpp,$(SPSH_PNG))
-SPSH_CPP        := $(patsubst $(D_SPSH_DIR)/%.png,$(BCPD_SPSH_DIR)/%.cpp,$(SPSH_PNG))
+SPSH_BIN        := $(patsubst $(D_SPSH_DIR)/%.png,$(B_SPSH_DIR)/%.bin,$(SPSH_PNG))
+SPSH_HPP        := $(patsubst $(D_SPSH_DIR)/%.png,$(B_SPSH_DIR)/%.hpp,$(SPSH_PNG))
+SPSH_CPP        := $(patsubst $(D_SPSH_DIR)/%.png,$(B_SPSH_DIR)/%.cpp,$(SPSH_PNG))
 COMMON_HPP      += $(SPSH_HPP)
 COMMON_CPP      += $(SPSH_CPP)
 
-$(BCPD_SPSH_DIR)/%.bin: $(D_SPSH_DIR)/%.png $(PALETTE_BIN) $(XFORM)
+$(B_SPSH_DIR)/%.bin: $(D_SPSH_DIR)/%.png $(PALETTE_BIN) $(XFORM)
 	@mkdir -p $(@D)
 	$(XFORM) copyTiles256 -p $(PALETTE_BIN) -o $@ $<
 
-$(BCPD_SPSH_DIR)/%.hpp $(BCPD_SPSH_DIR)/%.cpp: $(BCPD_SPSH_DIR)/%.bin $(SCRIPT_EMBED)
+$(B_SPSH_DIR)/%.hpp $(B_SPSH_DIR)/%.cpp: $(B_SPSH_DIR)/%.bin $(SCRIPT_EMBED)
 	@mkdir -p $(@D)
-	$(NODE) $(SCRIPT_EMBED)       \
-		-o $(BCPD_SPSH_DIR)/$*.hpp  \
-		-o $(BCPD_SPSH_DIR)/$*.cpp  \
-		-n $(B_COMMON_DIR)          \
-		$(BCPD_SPSH_DIR)/$*.bin
+	$(NODE) $(SCRIPT_EMBED)    \
+		-o $(B_SPSH_DIR)/$*.hpp  \
+		-o $(B_SPSH_DIR)/$*.cpp  \
+		-n $(B_COMMON_DIR)       \
+		$(B_SPSH_DIR)/$*.bin
 
-# -----
+#
+# Tilesheets generation
+#
+
+TLSH_PNG        := $(shell find $(D_TLSH_DIR) -type f -name '*.png')
+TLSH_BIN        := $(patsubst $(D_TLSH_DIR)/%.png,$(B_TLSH_DIR)/%.bin,$(TLSH_PNG))
+TLSH_HPP        := $(patsubst $(D_TLSH_DIR)/%.png,$(B_TLSH_DIR)/%.hpp,$(TLSH_PNG))
+TLSH_CPP        := $(patsubst $(D_TLSH_DIR)/%.png,$(B_TLSH_DIR)/%.cpp,$(TLSH_PNG))
+COMMON_HPP      += $(TLSH_HPP)
+COMMON_CPP      += $(TLSH_CPP)
+
+$(B_TLSH_DIR)/%.bin: $(D_TLSH_DIR)/%.png $(PALETTE_BIN) $(XFORM)
+	@mkdir -p $(@D)
+	$(XFORM) copyTiles256 -p $(PALETTE_BIN) -o $@ $<
+
+$(B_TLSH_DIR)/%.hpp $(B_TLSH_DIR)/%.cpp: $(B_TLSH_DIR)/%.bin $(SCRIPT_EMBED)
+	@mkdir -p $(@D)
+	$(NODE) $(SCRIPT_EMBED)    \
+		-o $(B_TLSH_DIR)/$*.hpp  \
+		-o $(B_TLSH_DIR)/$*.cpp  \
+		-n $(B_COMMON_DIR)       \
+		$(B_TLSH_DIR)/$*.bin
+
+#
+# Animations generation
+#
 
 ANIMATIONS      := $(P_DATA_DIR)/animations.js
-ANIMATIONS_HPP  := $(BCP_DATA_DIR)/animations.hpp
-ANIMATIONS_CPP  := $(BCP_DATA_DIR)/animations.cpp
+ANIMATIONS_HPP  := $(B_DATA_DIR)/animations.hpp
+ANIMATIONS_CPP  := $(B_DATA_DIR)/animations.cpp
 COMMON_HPP      += $(ANIMATIONS_HPP)
 COMMON_CPP      += $(ANIMATIONS_CPP)
 
@@ -287,47 +361,50 @@ $(ANIMATIONS_HPP) $(ANIMATIONS_CPP): $(ANIMATIONS) $(M_SCRIPTS_DIR)/animations.j
 	@mkdir -p $(@D)
 	$(NODE) $(M_SCRIPTS_DIR)/animations.js -o $(ANIMATIONS_HPP) -o $(ANIMATIONS_CPP) $(ANIMATIONS)
 
-# -----
+#
+# Songs and DPCM table generation
+#
 
-DPCM_TABLE      := $(BCPD_DPCM_DIR)/dpcm-table.json
-DPCM_TABLE_HPP  := $(BCPD_DPCM_DIR)/DpcmTable.hpp
-DPCM_TABLE_CPP  := $(BCPD_DPCM_DIR)/DpcmTable.cpp
+DPCM_TABLE      := $(B_DPCM_DIR)/dpcm-table.json
+DPCM_TABLE_HPP  := $(B_DPCM_DIR)/DpcmTable.hpp
+DPCM_TABLE_CPP  := $(B_DPCM_DIR)/DpcmTable.cpp
 COMMON_HPP      += $(DPCM_TABLE_HPP)
 COMMON_CPP      += $(DPCM_TABLE_CPP)
 
 SONGS_TXT       := $(shell find $(D_SONGS_DIR) -type f -name '*.txt')
-SONGS_BIN       := $(patsubst $(D_SONGS_DIR)/%.txt,$(BCPD_SONGS_DIR)/%.bin,$(SONGS_TXT))
-SONGS_HPP       := $(patsubst $(D_SONGS_DIR)/%.txt,$(BCPD_SONGS_DIR)/%.hpp,$(SONGS_TXT))
-SONGS_CPP       := $(patsubst $(D_SONGS_DIR)/%.txt,$(BCPD_SONGS_DIR)/%.cpp,$(SONGS_TXT))
+SONGS_BIN       := $(patsubst $(D_SONGS_DIR)/%.txt,$(B_SONGS_DIR)/%.bin,$(SONGS_TXT))
+SONGS_HPP       := $(patsubst $(D_SONGS_DIR)/%.txt,$(B_SONGS_DIR)/%.hpp,$(SONGS_TXT))
+SONGS_CPP       := $(patsubst $(D_SONGS_DIR)/%.txt,$(B_SONGS_DIR)/%.cpp,$(SONGS_TXT))
 COMMON_HPP      += $(SONGS_HPP)
 COMMON_CPP      += $(SONGS_CPP)
 
 $(DPCM_TABLE) $(DPCM_TABLE_HPP) $(DPCM_TABLE_CPP): $(SONGS_TXT) $(SCRIPT_FAMI)
 	@mkdir -p $(@D)
-	$(NODE) $(SCRIPT_FAMI) dpcm-table -t $(DPCM_TABLE) -d $(D_DPCM_DIR) -x $(BCPD_DPCM_DIR) \
-		$(SONGS_TXT)
+	$(NODE) $(SCRIPT_FAMI) dpcm-table -t $(DPCM_TABLE) -d $(D_DPCM_DIR) -x $(B_DPCM_DIR) $(SONGS_TXT)
 
 define fami_dpcm_hint
 	$(info $(1))
-	@$(1); status=$$?;                                               \
-	if [ $$status -eq 2 ]; then                                      \
-		echo "\nMissing DPCM samples when building song:\n  $<" >&2;   \
-		echo "\nTry to extract the missing samples by running:\n" >&2; \
-		echo "  make dpcm-export\n" >&2;                               \
-	fi;                                                              \
+	@$(1); status=$$?;                                                \
+	if [ $$status -eq 2 ]; then                                       \
+		echo "\nMissing DPCM samples when building song:\n  $<" >&2;    \
+		echo "\nTry to extract the missing samples by running:\n" >&2;  \
+		echo "  make dpcm-export\n" >&2;                                \
+	fi;                                                               \
 	exit $$status;
 endef
 
-$(BCPD_SONGS_DIR)/%.bin: $(D_SONGS_DIR)/%.txt $(DPCM_TABLE) $(SCRIPT_FAMI)
+$(B_SONGS_DIR)/%.bin: $(D_SONGS_DIR)/%.txt $(DPCM_TABLE) $(SCRIPT_FAMI)
 	@mkdir -p $(@D)
 	$(call fami_dpcm_hint,$(NODE) $(SCRIPT_FAMI) song -o $@ -t $(DPCM_TABLE) $<)
 
-$(BCPD_SONGS_DIR)/%.hpp $(BCPD_SONGS_DIR)/%.cpp: $(BCPD_SONGS_DIR)/%.bin $(SCRIPT_EMBED)
+$(B_SONGS_DIR)/%.hpp $(B_SONGS_DIR)/%.cpp: $(B_SONGS_DIR)/%.bin $(SCRIPT_EMBED)
 	@mkdir -p $(@D)
-	$(NODE) $(SCRIPT_EMBED) -o $(BCPD_SONGS_DIR)/$*.hpp -o $(BCPD_SONGS_DIR)/$*.cpp \
-		-n $(B_COMMON_DIR) $(BCPD_SONGS_DIR)/$*.bin
+	$(NODE) $(SCRIPT_EMBED) -o $(B_SONGS_DIR)/$*.hpp -o $(B_SONGS_DIR)/$*.cpp -n $(B_COMMON_DIR) \
+		$(B_SONGS_DIR)/$*.bin
 
-# -----
+#
+# DPCM export from songs (must be ran manually via `make dpcm-export`)
+#
 
 dpcm-export:
 	@mkdir -p $(D_DPCM_DIR)
@@ -341,7 +418,9 @@ dpcm-export-overwrite:
 		$(NODE) $(SCRIPT_FAMI) dpcm-export -d $(D_DPCM_DIR) -f "$$input";  \
 	done
 
-# -----
+#
+# Main GBA ROM build
+#
 
 P_SRC_S         := $(shell find $(P_SRC_DIR) -type f -name '*.s')
 P_SRC_C         := $(shell find $(P_SRC_DIR) -type f -name '*.c')

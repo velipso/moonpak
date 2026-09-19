@@ -35,19 +35,19 @@ namespace Inp {
 
   template<int Shift>
   struct Button {
-    bool changed() {
+    bool changed() const {
       return (Inp::value & (1u << (Shift + 16))) != 0;
     }
 
-    bool set() {
+    bool set() const {
       return (Inp::value & (1u << Shift)) != 0;
     }
 
-    bool rel() {
+    bool rel() const {
       return changed() && !set();
     }
 
-    bool hit() {
+    bool hit() const {
       return changed() && set();
     }
   };
@@ -75,5 +75,13 @@ namespace Inp {
 
   inline void update() {
     update(Reg::KEYINPUT::get() ^ 0x3ff);
+  }
+
+  inline int dx() {
+    return (Left.set() ? -1 : 0) + (Right.set() ? 1 : 0);
+  }
+
+  inline int dy() {
+    return (Up.set() ? -1 : 0) + (Down.set() ? 1 : 0);
   }
 }

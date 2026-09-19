@@ -719,6 +719,7 @@ function parseFileIntoTree(fileData: string): Chunk[] {
     while (line.charAt(tab) === ' ' || line.charAt(tab) === '\t') {
       tab++;
     }
+    if (line.startsWith('#')) continue;
     const { name, attributes } = parseLine(line.substr(tab));
     const chunk: Chunk = {
       name,
@@ -1368,7 +1369,7 @@ async function generateDpcmTableFiles(
     `namespace DpcmTable {`,
     `  struct Entry {`,
     `    const uint8_t *sample;`,
-    `    const uint32_t size;`,
+    `    uint32_t size;`,
     `  };`,
     ``,
     `  extern const Entry entries[];`,
