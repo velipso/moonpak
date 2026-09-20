@@ -2,8 +2,10 @@
 #pragma once
 #include "moonpak/Oam.hpp"
 #include "moonpak/VramObj.hpp"
-#include "moonpak/types/Spr.hpp"
 #include <stdint.h>
+
+namespace moonpak {
+#include "moonpak/types/Spr.hpp"
 
 struct SprCopy {
   int handle;
@@ -208,3 +210,5 @@ struct SprEntry {
 inline SprEntry Spr::entry(int8_t handle) {
   return { handle };
 }
+
+} // moonpak

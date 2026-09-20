@@ -28,8 +28,9 @@ static inline bool atomicBitClear(uint32_t *addr, uint32_t mask) {
 extern "C" {
   // these "atomic" actions are implemented by disabling interrupts (via CPSR) in the critical
   // section of code
-  extern bool atomicBitSet(uint32_t *addr, uint32_t mask);
-  extern bool atomicBitClear(uint32_t *addr, uint32_t mask);
+  extern bool moonpak_atomicBitSet(uint32_t *addr, uint32_t mask);
+  extern bool moonpak_atomicBitClear(uint32_t *addr, uint32_t mask);
 }
-
+#define atomicBitSet    moonpak_atomicBitSet
+#define atomicBitClear  moonpak_atomicBitClear
 #endif // TESTS

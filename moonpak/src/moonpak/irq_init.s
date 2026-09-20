@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: 0BSD
     .section    .text, "x"
-    .global     irq_init
+    .global     moonpak_irq_init
     .equ REG_IE, 0x04000200
     .equ REG_IF, 0x04000202
     .equ REG_IME, 0x04000208
     .cpu        arm7tdmi
     .thumb
     .thumb_func
-irq_init:
+moonpak_irq_init:
     // disable interrupts during setup
     ldr   r0, =REG_IME
     ldrb  r2, [r0]
@@ -15,7 +15,7 @@ irq_init:
     strb  r1, [r0]
 
     // clear handlers
-    ldr   r0, =irq_vblank
+    ldr   r0, =moonpak_irq_vblank
     str   r1, [r0, # 0] // vblank
     str   r1, [r0, # 4] // hblank
     str   r1, [r0, # 8] // vcount
@@ -33,7 +33,7 @@ irq_init:
 
     // set IRQ handler
     ldr   r0, =0x03007ffc
-    ldr   r1, =irq_handler
+    ldr   r1, =moonpak_irq_handler
     str   r1, [r0]
 
     // clear IE

@@ -30,6 +30,8 @@
 #include "moonpak/mem.hpp"
 #include <stdint.h>
 
+namespace moonpak {
+
 struct VramObj {
   static VramObj *global;
   uint32_t avail[32]; // 1024 bits, for each 4bpp 8x8 cell in VRAM
@@ -161,3 +163,5 @@ struct VramObj {
   static int test(bool verbose);
 #endif
 };
+
+} // moonpak

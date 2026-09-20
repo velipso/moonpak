@@ -2,6 +2,8 @@
 #pragma once
 #include <stdint.h>
 
+namespace moonpak {
+
 namespace SndData {
   extern const uint16_t noteToTimer[108];
   extern const uint16_t timerToDphase[4097];
@@ -125,3 +127,5 @@ namespace SndData {
     return (const int16_t *)(waveTables + os.offset);
   }
 };
+
+} // moonpak

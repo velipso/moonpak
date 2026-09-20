@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: 0BSD
     .section    .iwram, "ax"
-    .global     sndRenderNoiseSet
-    .global     sndRenderNoiseAdd
-    .global     sndQuantize8
+    .global     moonpak_sndRenderNoiseSet
+    .global     moonpak_sndRenderNoiseAdd
+    .global     moonpak_sndQuantize8
     .cpu        arm7tdmi
     .arm
 
@@ -12,7 +12,7 @@
     eorcs   r5, r5, r8         // if old bit 0: s ^= 0x80200003
 .endm
 
-sndRenderNoiseSet:
+moonpak_sndRenderNoiseSet:
     cmp     r1, #0
     bxeq    lr
     push    {r4-r9}
@@ -42,7 +42,7 @@ sndRenderNoiseSet:
     pop     {r4-r9}
     bx      lr
 
-sndRenderNoiseAdd:
+moonpak_sndRenderNoiseAdd:
     cmp     r1, #0
     bxeq    lr
     push    {r4-r9}
@@ -76,7 +76,7 @@ sndRenderNoiseAdd:
     pop     {r4-r9}
     bx      lr
 
-sndQuantize8:
+moonpak_sndQuantize8:
     cmp     r1, #0
     bxeq    lr
     push    {r4, lr}

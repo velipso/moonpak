@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: 0BSD
     .section    .iwram, "ax"
-    .global     atomicBitSet
-    .global     atomicBitClear
+    .global     moonpak_atomicBitSet
+    .global     moonpak_atomicBitClear
     .cpu        arm7tdmi
     .arm
 
-atomicBitSet: // (uint32_t *addr, uint32_t mask)
+moonpak_atomicBitSet: // (uint32_t *addr, uint32_t mask)
     mrs   r2, cpsr        // save original CPSR
     orr   r3, r2, #0x80
     msr   cpsr_c, r3      // IRQ off
@@ -21,7 +21,7 @@ atomicBitSet: // (uint32_t *addr, uint32_t mask)
     mov   r0, #0
     bx    lr
 
-atomicBitClear: // (uint32_t *addr, uint32_t mask)
+moonpak_atomicBitClear: // (uint32_t *addr, uint32_t mask)
     mrs   r2, cpsr        // save original CPSR
     orr   r3, r2, #0x80
     msr   cpsr_c, r3      // IRQ off

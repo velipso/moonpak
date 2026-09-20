@@ -5,9 +5,16 @@
 #include "moonpak/atomic.hpp"
 #include "moonpak/mem.hpp"
 #include <stdlib.h>
-
 #ifdef TESTS
 #include <stdio.h>
+#else
+#include "data/animations.hpp"
+#include "moonpak/log.hpp"
+#endif
+
+namespace moonpak {
+
+#ifdef TESTS
 static bool g_verbose;
 static bool g_doubleFree;
 #define log(fmt, ...) if (g_verbose) printf(fmt "\n", ##__VA_ARGS__)
@@ -31,9 +38,6 @@ namespace AnimData {
 namespace Anim {
   static constexpr uint32_t test = 2;
 }
-#else
-#include "data/animations.hpp"
-#include "moonpak/log.hpp"
 #endif
 
 static inline u8 sprRand(Spr *spr) {
@@ -936,3 +940,5 @@ int Spr::test(bool verbose) {
   return 0;
 }
 #endif
+
+} // moonpak

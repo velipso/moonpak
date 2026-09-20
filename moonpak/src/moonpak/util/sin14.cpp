@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 #include "sin14.hpp"
 
+namespace moonpak {
+
 // Q2.14, based on 120 angles in a circle; ang+30 for cosine
 const int16_t sin14[151] = {
   // for (let i = 0; i <= 150; i++) out.push(Math.round(16384 * Math.sin(i * Math.PI / 60)));
@@ -15,3 +17,5 @@ const int16_t sin14[151] = {
   4240,5063,5872,6664,7438,8192,8923,9630,10311,10963,11585,12176,12733,13255,13741,14189,14598,
   14968,15296,15582,15826,16026,16182,16294,16362,16384
 };
+
+} // moonpak

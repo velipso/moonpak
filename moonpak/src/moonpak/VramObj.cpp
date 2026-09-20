@@ -13,6 +13,8 @@ static bool g_doubleFree;
 #define log(fmt, ...)
 #endif
 
+namespace moonpak {
+
 VramObj *VramObj::global = nullptr;
 
 VramObj &VramObj::reset() {
@@ -246,3 +248,5 @@ int VramObj::test(bool verbose) {
   return g_doubleFree ? 1 : 0;
 }
 #endif
+
+} // moonpak

@@ -36,6 +36,8 @@
 #include "moonpak/Inp.hpp"
 #include <stdint.h>
 
+namespace moonpak {
+
 namespace Rnd {
   extern uint32_t seed;
   extern uint32_t i;
@@ -63,3 +65,5 @@ namespace Rnd {
     return hash(seed, i++);
   }
 }
+
+} // moonpak

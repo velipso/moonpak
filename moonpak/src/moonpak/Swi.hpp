@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 #pragma once
 
+namespace moonpak {
+
 namespace Swi {
   /* 00 */ void softReset();
   /* 01 */ void registerRamReset();
@@ -9,3 +11,5 @@ namespace Swi {
   /* 04 */ void intrWait();
   /* 05 */ void vblankIntrWait();
 }
+
+} // moonpak

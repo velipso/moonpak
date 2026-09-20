@@ -3,6 +3,8 @@
 #include "moonpak/Snd.hpp"
 #include <stdint.h>
 
+namespace moonpak {
+
 void sndRenderAdpcmSet(
   int16_t *out,
   uint32_t samples, // any length
@@ -86,7 +88,8 @@ void sndRenderWaveTableAdd128(
   const int16_t *waveTable
 );
 
-extern "C" void sndRenderNoiseSet(
+#ifdef PLATFORM_GBA
+extern "C" void moonpak_sndRenderNoiseSet(
   int16_t *out,
   uint32_t samples,
   int volume,
@@ -94,7 +97,7 @@ extern "C" void sndRenderNoiseSet(
   uint32_t dphase,
   uint32_t *state
 );
-extern "C" void sndRenderNoiseAdd(
+extern "C" void moonpak_sndRenderNoiseAdd(
   int16_t *out,
   uint32_t samples,
   int volume,
@@ -102,6 +105,26 @@ extern "C" void sndRenderNoiseAdd(
   uint32_t dphase,
   uint32_t *state
 );
+#define sndRenderNoiseSet moonpak_sndRenderNoiseSet
+#define sndRenderNoiseAdd moonpak_sndRenderNoiseAdd
+#else
+void sndRenderNoiseSet(
+  int16_t *out,
+  uint32_t samples,
+  int volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  uint32_t *state
+);
+void sndRenderNoiseAdd(
+  int16_t *out,
+  uint32_t samples,
+  int volume,
+  uint32_t *phase,
+  uint32_t dphase,
+  uint32_t *state
+);
+#endif
 
 static inline int sndAdpcmStateFromHeader(const uint8_t *data) {
   int index = data[2];
@@ -122,3 +145,5 @@ static inline uint32_t sndSampleCountPerFrame(int frame) {
     ? 552
     : 548;
 }
+
+} // moonpak

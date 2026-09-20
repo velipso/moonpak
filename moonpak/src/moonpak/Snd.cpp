@@ -7,7 +7,10 @@
 #ifdef PLATFORM_GBA
 #include "moonpak/Irq.hpp"
 #include "moonpak/Reg.hpp"
+#include "data/dpcm/DpcmTable.hpp"
 #endif
+
+namespace moonpak {
 
 #ifdef TESTS
 #include <stdio.h>
@@ -63,9 +66,6 @@ const uint8_t testSong[] = {
 static bool g_verbose;
 #define log(fmt, ...) if (g_verbose) printf(fmt, ##__VA_ARGS__)
 #else
-#ifdef PLATFORM_GBA
-#include "data/dpcm/DpcmTable.hpp"
-#endif
 #define log(fmt, ...)
 #endif
 
@@ -724,3 +724,5 @@ int Snd::test(bool verbose) {
   return 0;
 }
 #endif
+
+} // moonpak

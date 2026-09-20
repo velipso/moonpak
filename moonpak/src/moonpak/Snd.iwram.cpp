@@ -21,6 +21,8 @@
   } while (0)
 #endif
 
+namespace moonpak {
+
 struct AdpcmTable {
   int value[89][16];
 };
@@ -333,8 +335,8 @@ void sndRenderWaveTableAdd128(
   *phase = p;
 }
 
-#ifdef PLATFORM_HOST
-extern "C" void sndRenderNoiseSet(
+#ifndef PLATFORM_GBA
+void sndRenderNoiseSet(
   int16_t *out,
   uint32_t samples,
   int volume,
@@ -369,7 +371,7 @@ extern "C" void sndRenderNoiseSet(
   *state = s;
 }
 
-extern "C" void sndRenderNoiseAdd(
+void sndRenderNoiseAdd(
   int16_t *out,
   uint32_t samples,
   int volume,
@@ -432,7 +434,8 @@ uint32_t Snd::tick() {
 #ifdef PLATFORM_GBA
 #if 1
 // use assembly version
-extern "C" void sndQuantize8(int8_t *bufferDMA, uint32_t samples, int16_t *bufferTemp);
+extern "C" void moonpak_sndQuantize8(int8_t *bufferDMA, uint32_t samples, int16_t *bufferTemp);
+#define sndQuantize8 moonpak_sndQuantize8
 #else
 static inline void sndQuantize8CPP(int8_t *bufferDMA, uint32_t samples, int16_t *bufferTemp) {
   while (samples-- > 0) {
@@ -440,6 +443,7 @@ static inline void sndQuantize8CPP(int8_t *bufferDMA, uint32_t samples, int16_t 
     *bufferDMA++ = sample < -128 ? -128 : sample > 127 ? 127 : sample;
   }
 }
+#define sndQuantize8 sndQuantize8CPP
 #endif
 
 void Snd::copy() {
@@ -485,3 +489,5 @@ void Snd::timer1Handler() {
     .done();
 }
 #endif
+
+} // moonpak

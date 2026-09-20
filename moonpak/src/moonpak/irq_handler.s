@@ -1,52 +1,52 @@
 // SPDX-License-Identifier: 0BSD
     .section    .iwram, "ax"
-    .global     irq_handler
-    .global     irq_vblank
-    .global     irq_hblank
-    .global     irq_vcount
-    .global     irq_timer0
-    .global     irq_timer1
-    .global     irq_timer2
-    .global     irq_timer3
-    .global     irq_serial
-    .global     irq_dma0
-    .global     irq_dma1
-    .global     irq_dma2
-    .global     irq_dma3
-    .global     irq_keypad
-    .global     irq_gamepak
+    .global     moonpak_irq_handler
+    .global     moonpak_irq_vblank
+    .global     moonpak_irq_hblank
+    .global     moonpak_irq_vcount
+    .global     moonpak_irq_timer0
+    .global     moonpak_irq_timer1
+    .global     moonpak_irq_timer2
+    .global     moonpak_irq_timer3
+    .global     moonpak_irq_serial
+    .global     moonpak_irq_dma0
+    .global     moonpak_irq_dma1
+    .global     moonpak_irq_dma2
+    .global     moonpak_irq_dma3
+    .global     moonpak_irq_keypad
+    .global     moonpak_irq_gamepak
     .cpu        arm7tdmi
     .arm
 
-irq_vblank:
+moonpak_irq_vblank:
     .space 4
-irq_hblank:
+moonpak_irq_hblank:
     .space 4
-irq_vcount:
+moonpak_irq_vcount:
     .space 4
-irq_timer0:
+moonpak_irq_timer0:
     .space 4
-irq_timer1:
+moonpak_irq_timer1:
     .space 4
-irq_timer2:
+moonpak_irq_timer2:
     .space 4
-irq_timer3:
+moonpak_irq_timer3:
     .space 4
-irq_serial:
+moonpak_irq_serial:
     .space 4
-irq_dma0:
+moonpak_irq_dma0:
     .space 4
-irq_dma1:
+moonpak_irq_dma1:
     .space 4
-irq_dma2:
+moonpak_irq_dma2:
     .space 4
-irq_dma3:
+moonpak_irq_dma3:
     .space 4
-irq_keypad:
+moonpak_irq_keypad:
     .space 4
-irq_gamepak:
+moonpak_irq_gamepak:
     .space 4
-irq_handler:
+moonpak_irq_handler:
     // offsets relative to 0x04000000
     .set IE    , 0x200
     .set IF    , 0x202
@@ -66,85 +66,85 @@ irq_handler:
     //
 
     // HBLANK
-    ldr   r3, =irq_hblank
+    ldr   r3, =moonpak_irq_hblank
     mov   r2, #1 << 1
     tst   r1, r2
     bne   interrupt_found
 
     // VCOUNT
-    add   r3, #irq_vcount - irq_hblank
+    add   r3, #moonpak_irq_vcount - moonpak_irq_hblank
     mov   r2, #1 << 2
     tst   r1, r2
     bne   interrupt_found
 
     // VBLANK
-    add   r3, #irq_vblank - irq_vcount
+    add   r3, #moonpak_irq_vblank - moonpak_irq_vcount
     mov   r2, #1 << 0
     tst   r1, r2
     bne   interrupt_found
 
     // TIMER0
-    add   r3, #irq_timer0 - irq_vblank
+    add   r3, #moonpak_irq_timer0 - moonpak_irq_vblank
     mov   r2, #1 << 3
     tst   r1, r2
     bne   interrupt_found
 
     // TIMER1
-    add   r3, #irq_timer1 - irq_timer0
+    add   r3, #moonpak_irq_timer1 - moonpak_irq_timer0
     mov   r2, #1 << 4
     tst   r1, r2
     bne   interrupt_found
 
     // TIMER2
-    add   r3, #irq_timer2 - irq_timer1
+    add   r3, #moonpak_irq_timer2 - moonpak_irq_timer1
     mov   r2, #1 << 5
     tst   r1, r2
     bne   interrupt_found
 
     // TIMER3
-    add   r3, #irq_timer3 - irq_timer2
+    add   r3, #moonpak_irq_timer3 - moonpak_irq_timer2
     mov   r2, #1 << 6
     tst   r1, r2
     bne   interrupt_found
 
     // SERIAL
-    add   r3, #irq_serial - irq_timer3
+    add   r3, #moonpak_irq_serial - moonpak_irq_timer3
     mov   r2, #1 << 7
     tst   r1, r2
     bne   interrupt_found
 
     // DMA0
-    add   r3, #irq_dma0 - irq_serial
+    add   r3, #moonpak_irq_dma0 - moonpak_irq_serial
     mov   r2, #1 << 8
     tst   r1, r2
     bne   interrupt_found
 
     // DMA1
-    add   r3, #irq_dma1 - irq_dma0
+    add   r3, #moonpak_irq_dma1 - moonpak_irq_dma0
     mov   r2, #1 << 9
     tst   r1, r2
     bne   interrupt_found
 
     // DMA2
-    add   r3, #irq_dma2 - irq_dma1
+    add   r3, #moonpak_irq_dma2 - moonpak_irq_dma1
     mov   r2, #1 << 10
     tst   r1, r2
     bne   interrupt_found
 
     // DMA3
-    add   r3, #irq_dma3 - irq_dma2
+    add   r3, #moonpak_irq_dma3 - moonpak_irq_dma2
     mov   r2, #1 << 11
     tst   r1, r2
     bne   interrupt_found
 
     // KEYPAD
-    add   r3, #irq_keypad - irq_dma3
+    add   r3, #moonpak_irq_keypad - moonpak_irq_dma3
     mov   r2, #1 << 12
     tst   r1, r2
     bne   interrupt_found
 
     // GAMEPAK
-    add   r3, #irq_gamepak - irq_keypad
+    add   r3, #moonpak_irq_gamepak - moonpak_irq_keypad
     mov   r2, #1 << 13
     tst   r1, r2
     bne   interrupt_found

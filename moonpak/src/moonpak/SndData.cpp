@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 #include "moonpak/SndData.hpp"
 
+namespace moonpak {
+
 namespace SndData {
   extern const uint16_t noteToTimer[108] {
     #include "moonpak/SndDataNoteToTimer.inc"
@@ -14,3 +16,5 @@ namespace SndData {
     #include "moonpak/SndDataWaveTables.inc"
   };
 }
+
+} // moonpak

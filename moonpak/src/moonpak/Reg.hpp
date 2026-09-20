@@ -3,6 +3,8 @@
 #pragma once
 #include <stdint.h>
 
+namespace moonpak {
+
 namespace Reg {
   struct DISPCNTReader {
     uint16_t value;
@@ -12600,3 +12602,5 @@ namespace Reg {
     }
   }
 }
+
+} // moonpak

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 #include "moonpak/Swi.hpp"
 
+namespace moonpak {
+
 void Swi::softReset() {
   __asm__("swi #0x000000" ::: "r0", "r1", "r2", "r3", "r12", "lr", "memory", "cc");
 }
@@ -24,3 +26,5 @@ void Swi::intrWait() {
 void Swi::vblankIntrWait() {
   __asm__("swi #0x050000" ::: "r0", "r1", "r2", "r3", "r12", "lr", "memory", "cc");
 }
+
+} // moonpak

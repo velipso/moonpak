@@ -30,6 +30,8 @@
 #include "moonpak/Reg.hpp"
 #include <stdint.h>
 
+namespace moonpak {
+
 namespace Inp {
   extern uint32_t value;
 
@@ -85,3 +87,5 @@ namespace Inp {
     return (Up.set() ? -1 : 0) + (Down.set() ? 1 : 0);
   }
 }
+
+} // moonpak

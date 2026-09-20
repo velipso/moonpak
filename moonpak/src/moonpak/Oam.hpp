@@ -49,6 +49,8 @@
 #include "moonpak/mem.hpp"
 #include <stdint.h>
 
+namespace moonpak {
+
 struct OamEntry;
 
 static inline int oamGetY(uint16_t shadow0) {
@@ -699,3 +701,5 @@ inline OamEntry Oam::entry(int8_t handle) {
   int k = handleToIndex[handle] * 4;
   return { handle, shadow[k + 0], shadow[k + 1], shadow[k + 2] };
 }
+
+} // moonpak

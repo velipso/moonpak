@@ -457,6 +457,8 @@ function finish() {
       `#pragma once`,
       `#include <stdint.h>`,
       ``,
+      `namespace moonpak {`,
+      ``,
       `struct SprEntryData;`,
       `typedef bool (*f_animFireHandler)(int8_t handle, SprEntryData &spr, int param);`,
       ``,
@@ -474,8 +476,7 @@ function finish() {
       hpp.push(`  static constexpr uint32_t ${name} = ${animationIndex[name]};`);
     }
 
-    hpp.push('}');
-    hpp.push('');
+    hpp.push('}', '', '} // moonpak', '');
     hpp = hpp.join('\n');
     if (verbose) console.log(hpp);
     if (outputHPP) {
@@ -504,6 +505,8 @@ function finish() {
       }
     }
     cpp.push(
+      ``,
+      `namespace moonpak {`,
       ``,
       `namespace AnimData {`,
       `  const f_animFireHandler handlers[] = {`,
@@ -561,7 +564,7 @@ function finish() {
     }
     cpp.push(`  };`, `}`);
 
-    cpp.push('');
+    cpp.push('', '} // moonpak', '');
     cpp = cpp.join('\n');
     if (verbose) console.log(cpp);
     if (outputCPP) {

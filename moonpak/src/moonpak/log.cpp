@@ -2,6 +2,8 @@
 #include "moonpak/log.hpp"
 #include <stdarg.h>
 
+namespace moonpak {
+
 void log(const char *fmt, ...) {
   // check for mGBA
   volatile uint16_t *reg = (volatile uint16_t *)0x4fff780;
@@ -68,3 +70,5 @@ void log(const char *fmt, ...) {
   *here = 0;
   *((volatile uint16_t *)0x04fff700) = 1 | 0x100;
 }
+
+} // moonpak

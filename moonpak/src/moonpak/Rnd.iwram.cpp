@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: 0BSD
 #include "moonpak/Rnd.hpp"
 
+namespace moonpak {
+
 namespace Rnd {
   uint32_t seed = 1;
   uint32_t i = 1;
@@ -43,3 +45,5 @@ namespace Rnd {
     }
   }
 }
+
+} // moonpak

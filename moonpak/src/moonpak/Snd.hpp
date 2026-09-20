@@ -55,6 +55,8 @@
 #define MOONPAK_SAMPLE_SHIFT  8
 #endif
 
+namespace moonpak {
+
 struct FamiHeader {
   uint32_t magic;
   uint16_t instrumentsLength;
@@ -238,3 +240,5 @@ struct Snd {
   static int test(bool verbose);
 #endif
 };
+
+} // moonpak

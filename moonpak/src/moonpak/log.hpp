@@ -2,4 +2,8 @@
 #pragma once
 #include <stdint.h>
 
+namespace moonpak {
+
 void log(const char *fmt, ...);
+
+} // moonpak

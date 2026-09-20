@@ -32,6 +32,8 @@ function header() {
     '#pragma once',
     '#include <stdint.h>',
     '',
+    'namespace moonpak {',
+    '',
     'namespace Reg {'
   );
   tab++;
@@ -194,7 +196,7 @@ function process(reg: string, { addr, width, ops, fields }: Register) {
 
 function footer() {
   tab--;
-  log('}');
+  log('}', '', '} // moonpak');
 }
 
 //

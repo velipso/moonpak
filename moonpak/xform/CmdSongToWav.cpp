@@ -20,6 +20,8 @@ namespace DpcmTable {
 #include "moonpak/Snd.iwram.cpp"
 #include "moonpak/SndData.cpp"
 
+using namespace moonpak;
+
 typedef uint32_t u32;
 typedef uint16_t u16;
 

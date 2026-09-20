@@ -13,6 +13,8 @@ static bool g_doubleFree;
 #define log(fmt, ...)
 #endif
 
+namespace moonpak {
+
 Oam *Oam::global = nullptr;
 
 Oam &Oam::reset() {
@@ -420,3 +422,5 @@ int Oam::test(bool verbose) {
   return 0;
 }
 #endif
+
+} // moonpak
