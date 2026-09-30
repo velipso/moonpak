@@ -11,4 +11,5 @@
 #include "moonpak/Snd.hpp"
 #include "moonpak/Spr.hpp"
 #include "moonpak/Swi.hpp"
+#include "moonpak/VramMap.hpp"
 #include "moonpak/VramObj.hpp"

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: 0BSD
 
-# project settings
+# initial settings
 PROJECT_DIR    := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 MOONPAK        := $(PROJECT_DIR)/../moonpak
 NAME           := template
@@ -8,6 +8,9 @@ GAME_TITLE     := "MP TEMPLATE"
 GAME_CODE      := "CMPE"
 MAKER_CODE     := "77"
 VERSION        := 0
+
+# initialize moonpak
+include $(MOONPAK)/moonpak-init.mk
 
 # GBA ARM compiler settings
 DEFINES        :=
@@ -26,4 +29,5 @@ TESTS_CXXFLAGS := -Wall -Wno-unused-function -O3
 TESTS_LDFLAGS  :=
 TESTS_LDLIBS   :=
 
-include $(MOONPAK)/moonpak.mk
+# finish and build
+include $(MOONPAK)/moonpak-done.mk
