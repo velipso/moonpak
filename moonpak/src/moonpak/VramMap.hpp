@@ -24,7 +24,7 @@
 //   }
 // }
 //
-// Then, hook up a VramMap (for example, 512x512 pixel map):
+// Then, use a VramMap (for example, 512x512 pixel map):
 //
 // using TextMap = VramMap::Text<512, 512>;
 //
@@ -32,17 +32,9 @@
 //
 // TextMap::copy(0, 0, 32, 32, copyTextRegion, user);
 //
-// For affine backgrounds, it's mostly the same, except the copyRegion receives a `uint8_t *`:
+// For affine backgrounds, it's mostly the same, but beware of hardware limitations:
 //
-// void copyAffineRegion(
-//   int dstOffset, // destination offset
-//   int dstStride, // destination cells per row
-//   int sx,        // source x (measured in cells)
-//   int sy,        // source y
-//   int w,         // width
-//   int h,         // height
-//   void *user     // user provided value to .copy(...)
-// ) {
+// void copyAffineRegion(...same as before...) {
 //   uint8_t *dst = VramMap::fromMapBase<uint8_t>(20) + offset; // mapBase (20) comes from BGXCNT
 //   // WARNING:
 //   // This function will receive odd-aligned pointers!
@@ -55,8 +47,19 @@
 //
 // AffineMap::copy(0, 0, 32, 32, copyAffineRegion, user);
 //
+// There is also a function for scrolling the map (works for both Text and Affine):
+//
+// SomeMap::scroll(oldSx, oldSy, newSx, newSy, copySomeRegion, user);
+//
+// oldSx/oldSy - the old source x/y
+// newSx/newSy - the new source x/y
+//
+// This will calculate and copy the thin strips on the edge of the map based on how much it's
+// scrolled.
+//
 #pragma once
 #include <stdint.h>
+#include "moonpak/Util.hpp"
 
 namespace moonpak {
 
@@ -84,6 +87,8 @@ namespace VramMap {
   struct Text {
     static_assert(Width == 256 || Width == 512);
     static_assert(Height == 256 || Height == 512);
+    static constexpr int MapWidth = Width / 8;
+    static constexpr int MapHeight = Height / 8;
     static constexpr int PlaneSize = 32; // 32 tiles
     static constexpr int Shift = 5; // 2^Shift == PlaneSize
     static constexpr int Mask = (1 << Shift) - 1;
@@ -136,6 +141,56 @@ namespace VramMap {
         leftY -= lh;
       }
     }
+
+    template<VramMapCopyRegion Fn>
+    static void scroll(
+      int oldSx,
+      int oldSy,
+      int newSx,
+      int newSy,
+      Fn copyRegion,
+      void *user = nullptr
+    ) {
+      int dx = Util::clamp(oldSx - newSx, -MapWidth, MapWidth);
+      int dy = Util::clamp(oldSy - newSy, -MapHeight, MapHeight);
+      int adx = Util::abs(dx);
+      int ady = Util::abs(dy);
+
+      if (adx <= 0 && ady <= 0) {
+        // nothing to do
+        return;
+      }
+
+      if (adx >= MapWidth || ady >= MapHeight) {
+        // just copy entire map
+        copy(newSx, newSy, MapWidth, MapHeight, copyRegion, user);
+        return;
+      }
+
+      // copy thin horizontal and vertical slices at edge of map
+      if (dy < 0) {
+        // copy thin horizontal strip at bottom of map
+        copy(newSx, newSy + MapHeight + dy, MapWidth, -dy, copyRegion, user);
+      } else if (dy > 0) {
+        // copy thin horizontal strip at top of map
+        copy(newSx, newSy, MapWidth, dy, copyRegion, user);
+      }
+      if (dx < 0) {
+        // copy thin vertical strip at right of map
+        if (dy < 0) {
+          copy(newSx + MapWidth + dx, newSy, -dx, MapHeight + dy, copyRegion, user);
+        } else {
+          copy(newSx + MapWidth + dx, newSy + dy, -dx, MapHeight - dy, copyRegion, user);
+        }
+      } else if (dx > 0) {
+        // copy thin vertical strip at left of map
+        if (dy < 0) {
+          copy(newSx, newSy, dx, MapHeight + dy, copyRegion, user);
+        } else {
+          copy(newSx, newSy + dy, dx, MapHeight - dy, copyRegion, user);
+        }
+      }
+    }
   };
 
   template <int Width, int Height>
@@ -178,6 +233,56 @@ namespace VramMap {
         oy = 0;
         sy += lh;
         leftY -= lh;
+      }
+    }
+
+    template<VramMapCopyRegion Fn>
+    static void scroll(
+      int oldSx,
+      int oldSy,
+      int newSx,
+      int newSy,
+      Fn copyRegion,
+      void *user = nullptr
+    ) {
+      int dx = Util::clamp(oldSx - newSx, -MapWidth, MapWidth);
+      int dy = Util::clamp(oldSy - newSy, -MapHeight, MapHeight);
+      int adx = Util::abs(dx);
+      int ady = Util::abs(dy);
+
+      if (adx <= 0 && ady <= 0) {
+        // nothing to do
+        return;
+      }
+
+      if (adx >= MapWidth || ady >= MapHeight) {
+        // just copy entire map
+        copy(newSx, newSy, MapWidth, MapHeight, copyRegion, user);
+        return;
+      }
+
+      // copy thin horizontal and vertical slices at edge of map
+      if (dy < 0) {
+        // copy thin horizontal strip at bottom of map
+        copy(newSx, newSy + MapHeight + dy, MapWidth, -dy, copyRegion, user);
+      } else if (dy > 0) {
+        // copy thin horizontal strip at top of map
+        copy(newSx, newSy, MapWidth, dy, copyRegion, user);
+      }
+      if (dx < 0) {
+        // copy thin vertical strip at right of map
+        if (dy < 0) {
+          copy(newSx + MapWidth + dx, newSy, -dx, MapHeight + dy, copyRegion, user);
+        } else {
+          copy(newSx + MapWidth + dx, newSy + dy, -dx, MapHeight - dy, copyRegion, user);
+        }
+      } else if (dx > 0) {
+        // copy thin vertical strip at left of map
+        if (dy < 0) {
+          copy(newSx, newSy, dx, MapHeight + dy, copyRegion, user);
+        } else {
+          copy(newSx, newSy + dy, dx, MapHeight - dy, copyRegion, user);
+        }
       }
     }
   };

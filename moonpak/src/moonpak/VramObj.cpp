@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 #include "moonpak/VramObj.hpp"
-#include "moonpak/util/ctz32.hpp"
+#include "moonpak/Util.hpp"
 #include "moonpak/atomic.hpp"
 
 #ifdef TESTS
@@ -88,7 +88,7 @@ retry:
     uint32_t bits = avail[w];
     while (bits) {
       // find next available 1 bit
-      int start = (w << 5) + ctz32(bits);
+      int start = (w << 5) + Util::ctz32(bits);
       bits &= bits - 1; // trick to clear the lowest 1
       if (is256 && (start & 1)) continue; // if 256 color, tiles must be aligned to 2
       if (start + slots > 1024) return -1; // not enough space, so don't bother

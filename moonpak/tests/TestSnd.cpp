@@ -10,5 +10,5 @@ TestSnd::TestSnd() {
 }
 
 int TestSnd::run(bool verbose) {
-  return Snd::test(verbose);
+  return moonpak::Snd::test(verbose);
 }

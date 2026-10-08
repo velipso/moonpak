@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: 0BSD
 #pragma once
 
+#include "moonpak/Fix.hpp"
 #include "moonpak/Inp.hpp"
 #include "moonpak/Irq.hpp"
 #include "moonpak/log.hpp"
@@ -11,5 +12,6 @@
 #include "moonpak/Snd.hpp"
 #include "moonpak/Spr.hpp"
 #include "moonpak/Swi.hpp"
+#include "moonpak/Util.hpp"
 #include "moonpak/VramMap.hpp"
 #include "moonpak/VramObj.hpp"

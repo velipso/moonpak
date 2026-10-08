@@ -152,7 +152,9 @@ struct VramObj {
   }
 
   static int bytes(int16_t handle) {
-    return (width(handle) * height(handle)) >> (is256(handle) ? 0 : 1);
+    int w = width(handle);
+    if (!is256(handle)) w >>= 1;
+    return w * height(handle);
   }
 
   static __attribute__((always_inline)) inline void copy(int16_t handle, const void *src) {

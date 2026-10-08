@@ -8,5 +8,5 @@ TestOam::TestOam() {
 }
 
 int TestOam::run(bool verbose) {
-  return Oam::test(verbose);
+  return moonpak::Oam::test(verbose);
 }

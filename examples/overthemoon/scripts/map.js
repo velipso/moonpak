@@ -105,7 +105,8 @@ for (let y = 0; y < data.height; y++) {
     // TODO: make smarter
     if (d1 >= 256) d1 -= 256;
     if (d2 >= 256) d2 -= 256;
-    out.push(d1 | (d2 << 8));
+    const logic = d1 <= 1 && d2 <= 1 ? 0 : 1; // TODO: this
+    out.push(d1 | (d2 << 6) | (logic << 12));
   }
 }
 

@@ -25,7 +25,7 @@ namespace Reg {
       uint32_t v = value;
       return (v >> 5) & 0x1u;
     }
-    uint32_t obj2D() const {
+    uint32_t obj1D() const {
       uint32_t v = value;
       return (v >> 6) & 0x1u;
     }
@@ -97,7 +97,7 @@ namespace Reg {
       }
       return *this;
     }
-    DISPCNTWriter obj2D(uint32_t v) {
+    DISPCNTWriter obj1D(uint32_t v) {
       if (v) {
         value |= 1u << 6;
       } else {
@@ -218,7 +218,7 @@ namespace Reg {
       mask |= 1u << 5;
       return *this;
     }
-    DISPCNTUpdater &obj2D(uint32_t v) {
+    DISPCNTUpdater &obj1D(uint32_t v) {
       if (v) {
         value |= 1u << 6;
       } else {

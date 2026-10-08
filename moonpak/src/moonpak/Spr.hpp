@@ -18,7 +18,7 @@ struct Spr {
   static Spr *global;
   uint32_t avail[4];
   SprEntryData entries[128];
-  u32 seed;
+  uint32_t seed;
   int worldXValue;
   int worldYValue;
   SprCopy *copyList;

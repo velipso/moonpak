@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: 0BSD
 #include "main.hpp"
-#include "types/Player.hpp"
+#include "types/MapCell.hpp"
 #include "data/palette.hpp"
-#include "data/spritesheets/digits.8x8.hpp"
 #include "data/animations.hpp"
 #include "data/songs/outro.hpp"
 #include "data/tilemaps/world.hpp"
@@ -15,6 +14,10 @@ Snd g_snd(2, 4);
 
 static uint8_t g_bg2MapBuffer[64 * 64];
 static uint8_t g_bg3MapBuffer[64 * 64];
+static uint8_t *g_logic;
+static int g_mapWidth;
+static int g_mapHeight;
+static inline constexpr Fix Q{8};
 
 using TileMap = VramMap::Affine<512, 512>;
 
@@ -23,7 +26,24 @@ static struct {
   int y;
   int mapX; // upper-left tile loaded onto screen
   int mapY;
+  int followX;
+  int followY;
+  bool followSnap;
 } g_camera;
+
+static struct {
+  int sprite;
+  int x;
+  int y;
+  int fx; // force
+  int fy;
+  int vx; // velocity
+  int vy;
+  int dead;
+  int gx; // grounded
+  int gy;
+  bool grounded;
+} g_user;
 
 static const int scroll[] = {
   // for (var i = 0; i < 320; i++) console.log(Math.round(i * 256 * 8/5));
@@ -53,27 +73,11 @@ static const int scroll[] = {
   128614, 129024, 129434, 129843, 130253, 130662
 };
 
-static inline int div5(int v) {
-  return v < 0 ? -((-v * 3277) >> 14) : (v * 3277) >> 14;
-}
-
-static inline int div10(int v) {
-  return v < 0 ? -((-v * 3277) >> 15) : (v * 3277) >> 15;
-}
-
-static inline int div320(int v) {
-  return v < 0 ? -((-v * 3277) >> 20) : (v * 3277) >> 20;
-}
-
-static inline int clamp(int v, int min, int max) {
-  return v < min ? min : v > max ? max : v;
-}
-
 static void irq_vblank() {
   Inp::update();
   Rnd::update();
-  int mx = g_camera.x - div320(g_camera.x) * 320;
-  int my = g_camera.y - div320(g_camera.y) * 320;
+  int mx = Util::emod<320>(Q.floor(g_camera.x));
+  int my = Util::emod<320>(Q.floor(g_camera.y));
   int x = scroll[mx];
   int y = scroll[my];
   Reg::BG2X::set(x);
@@ -87,6 +91,7 @@ static void irq_vblank() {
 }
 
 static inline void nextframe() {
+  g_spr.world(Q.floor(g_camera.x), Q.floor(g_camera.y));
   g_spr.tick();
   Swi::vblankIntrWait();
   g_snd.copy();
@@ -104,18 +109,16 @@ static void copyTileMap(
   uint8_t *map1 = g_bg3MapBuffer + dstOffset;
   uint8_t *map2 = g_bg2MapBuffer + dstOffset;
 
-  const uint16_t *mapData = (const uint16_t *)dataTilemapsWorld;
-  int mapWidth = mapData[0];
-  mapData += 2;
+  const uint16_t *mapData = ((const uint16_t *)dataTilemapsWorld) + 2;
 
   for (int y = 0; y < h; y++) {
     for (int x = 0; x < w; x++) {
       int tx = x + sx;
       int ty = y + sy;
 
-      int tile2 = mapData[(tx >> 1) + (ty >> 1) * mapWidth];
-      int tile1 = tile2 & 0x3f;
-      tile2 = (tile2 >> 8) & 0x3f;
+      MapCell cell = { mapData[(tx >> 1) + (ty >> 1) * g_mapWidth] };
+      int tile1 = cell.bg1();
+      int tile2 = cell.bg2();
 
       int tile1X = tile1 & 0xf;
       int tile1Y = tile1 >> 4;
@@ -149,35 +152,37 @@ static void copyTileMap(
 }
 
 static void camera_set(int x, int y) {
-  const uint16_t *mapData = (const uint16_t *)dataTilemapsWorld;
-  int mapWidth = *mapData++;
-  int mapHeight = *mapData++;
+  x = Util::clamp(x, 0, Q(g_mapWidth * 10 - 240));
+  y = Util::clamp(y, 0, Q(g_mapHeight * 10 - 160));
 
-  x = clamp(x, 0, mapWidth * 10 - 240);
-  y = clamp(y, 0, mapHeight * 10 - 160);
+  if (x == g_camera.x && y == g_camera.y) return;
 
   g_camera.x = x;
   g_camera.y = y;
 
-  int mapX = div5(x);
-  int mapY = div5(y);
+  int mapX = Util::div<5>(Q.floor(x));
+  int mapY = Util::div<5>(Q.floor(y));
 
-  int dx = clamp(mapX - g_camera.mapX, -64, 64);
-  int dy = clamp(mapY - g_camera.mapY, -64, 64);
+  TileMap::scroll(g_camera.mapX, g_camera.mapY, mapX, mapY, copyTileMap);
 
   g_camera.mapX = mapX;
   g_camera.mapY = mapY;
+}
 
-  if (dx < 0) {
-    TileMap::copy(g_camera.mapX, g_camera.mapY, -dx, 64, copyTileMap);
-  } else if (dx > 0) {
-    TileMap::copy(g_camera.mapX + 64 - dx, g_camera.mapY, dx, 64, copyTileMap);
+static int check_collision() {
+  int ux = Q.floor(g_user.x);
+  int uy = Q.floor(g_user.y);
+  int x1 = Util::div<10>(ux);
+  int y1 = Util::div<10>(uy);
+  int x2 = Util::div<10>(ux + 9);
+  int y2 = Util::div<10>(uy + 9);
+  if (x1 < 0 || x2 >= g_mapWidth || y1 < 0 || y2 >= g_mapHeight) {
+    return 1;
   }
-  if (dy < 0) {
-    TileMap::copy(g_camera.mapX, g_camera.mapY, 64, -dy, copyTileMap);
-  } else if (dy > 0) {
-    TileMap::copy(g_camera.mapX, g_camera.mapY + 64 - dy, 64, dy, copyTileMap);
-  }
+  int k = x1 + y1 * g_mapWidth;
+  int kx = x2 > x1 ? 1 : 0;
+  int ky = y2 > y1 ? g_mapWidth : 0;
+  return g_logic[k] | g_logic[k + kx] | g_logic[k + ky] | g_logic[k + kx + ky];
 }
 
 extern "C" int main() {
@@ -185,6 +190,7 @@ extern "C" int main() {
   Irq::vblank(irq_vblank);
 
   Reg::DISPCNT::write()
+    .obj1D(1)
     .mode(2)
     .bg2(1)
     .bg3(1)
@@ -262,37 +268,288 @@ extern "C" int main() {
 
   // initialize camera off-map, so camera_set will paint entire map
   const uint16_t *mapData = (const uint16_t *)dataTilemapsWorld;
-  int mapWidth = mapData[0];
-  int mapHeight = mapData[1];
-  g_camera.x = mapWidth * 10;
-  g_camera.y = mapHeight * 10;
-  g_camera.mapX = mapWidth;
-  g_camera.mapY = mapHeight;
+  g_mapWidth = *mapData++;
+  g_mapHeight = *mapData++;
+
+  g_logic = (uint8_t *)calloc(g_mapWidth * g_mapHeight, 1);
+  g_camera.x = g_mapWidth * 10;
+  g_camera.y = g_mapHeight * 10;
+  g_camera.mapX = g_mapWidth;
+  g_camera.mapY = g_mapHeight;
+  g_camera.followSnap = true;
+
+  for (int y = 0, k = 0; y < g_mapHeight; y++) {
+    for (int x = 0; x < g_mapWidth; x++, k++) {
+      MapCell cell = { mapData[k] };
+      g_logic[k] = cell.logic();
+    }
+  }
 
   camera_set(0, 0);
 
-  int x = g_camera.x;
-  int y = g_camera.y;
-  int step = 7;
+  g_user.x = Q(1230);
+  g_user.y = Q(1070);
+
+  g_user.sprite = g_spr.alloc(16, 16, 0, true);
+  g_spr.entry(g_user.sprite)
+    .show(true)
+    .anim(Anim::heroC);
+
   for (;;) {
-    if (Inp::Select.set()) {
-      if (Inp::Up.hit() && y > 0) y--;
-      if (Inp::Right.hit()) x++;
-      if (Inp::Down.hit()) y++;
-      if (Inp::Left.hit() && x > 0) x--;
-    } else {
-      if (Inp::Up.set() && y > step - 1) y -= step;
-      if (Inp::Right.set()) x += step;
-      if (Inp::Down.set()) y += step;
-      if (Inp::Left.set() && x > step - 1) x -= step;
+    // move user
+    {
+      g_user.fx = 0;
+      g_user.fy = 0;
+      int h = 0;
+      int v = 0;
+
+      h = Inp::dx();
+      v = Inp::dy();
+
+      if (Inp::A.hit() && g_user.grounded) {
+        g_user.fy += Q(-6.67);
+      }
+
+      g_user.fx += h * Q(0.5);
+      int gravity = Q(0.2);
+      g_user.vx += g_user.fx;
+      g_user.vy += gravity + g_user.fy;
+      g_user.vx = Q.mul(g_user.vx, g_user.grounded ? Q(0.8) : Q(0.85));
+      g_user.vy = Q.mul(g_user.vy, Q(0.98));
+
+      // move user
+      int remainderX = Q.frac(g_user.x);
+      int currentSX = g_user.vx;
+      int remainderY = Q.frac(g_user.y);
+      int currentSY = g_user.vy;
+      int ox, oy, osx, osy;
+      bool doneX = false;
+      bool doneY = false;
+      bool change;
+      g_user.grounded = false;
+
+      while ((currentSX != 0 && !doneX) || (currentSY != 0 && !doneY)) {
+        ox = g_user.x;
+        oy = g_user.y;
+        osx = currentSX;
+        osy = currentSY;
+
+        change = true;
+        { // step X
+          if (currentSX > 0) {
+            // enough velocity to advance one pixel?
+            if (currentSX + remainderX >= Q(1)) {
+              // advance one pixel
+              g_user.x += Q(1) - remainderX;
+              currentSX -= Q(1) - remainderX;
+              remainderX = 0;
+            } else {
+              // not enough velocity to advance one pixel, so just consume rest
+              g_user.x += currentSX;
+              currentSX = 0;
+            }
+          } else if (currentSX < 0) {
+            // any remainder?
+            if (remainderX + currentSX < 0 && remainderX != 0) {
+              // transfer remainder
+              currentSX += remainderX;
+              g_user.x -= remainderX;
+              remainderX = Q(1); // go left next iteration
+            } else {
+              // not enough velocity to advance one pixel, so just consume rest
+              g_user.x += currentSX;
+              currentSX = 0;
+            }
+          } else {
+            change = false;
+          }
+        }
+
+        if (change) { // check for collision
+          int c = check_collision();
+          if (c) {
+            g_user.x = ox;
+            g_user.vx = 0;
+            currentSX = osx;
+            doneX = true;
+          }
+        }
+
+        change = true;
+        { // step Y
+          if (currentSY > 0) {
+            // enough velocity to advance one pixel?
+            if (currentSY + remainderY >= Q(1)) {
+              // advance one pixel
+              g_user.y += Q(1) - remainderY;
+              currentSY -= Q(1) - remainderY;
+              remainderY = 0;
+            } else {
+              // not enough velocity to advance one pixel, so just consume rest
+              g_user.y += currentSY;
+              currentSY = 0;
+            }
+          } else if (currentSY < 0) {
+            // any remainder?
+            if (remainderY + currentSY < 0 && remainderY != 0) {
+              // transfer remainder
+              currentSY += remainderY;
+              g_user.y -= remainderY;
+              remainderY = Q(1); // go left next iteration
+            } else {
+              // not enough velocity to advance one pixel, so just consume rest
+              g_user.y += currentSY;
+              currentSY = 0;
+            }
+          } else {
+            change = false;
+          }
+        }
+
+        if (change) { // check for collision
+          int c = check_collision();
+          if (c) {
+            g_user.y = oy;
+            g_user.vy = 0;
+            currentSY = osy;
+            doneY = true;
+            g_user.grounded = true;
+          }
+        }
+      }
+
+    /*
+    function stepX() {
+      // check for collision
+      const { collide: userCollide, spike: userSpike, home: userHome } =
+        overlaps(userX, userY);
+      const { collide: itemCollide, spike: itemSpike } = overlaps(userX, userY - 9);
+      if (grabItem && itemSpike)
+        explodeItem();
+      if (userSpike)
+        explodeUser();
+      if (userHome)
+        checkBeatGame();
+      if (userCollide || (grabItem && itemCollide)) {
+        // revert
+        userX = ox;
+        velX = 0;
+        currentSX = osx;
+        pushed = currentSX < 0 ? -1 : currentSX > 0 ? 1 : false;
+        doneX = true;
+      } else if (ox !== userX) {
+        pushed = false;
+      }
     }
-    if (Inp::Start.hit()) {
-      log("%x %x", x, y);
+
+    function stepY() {
+      // check for collision
+      let userCollide, userSpike, userHome, itemCollide, itemSpike;
+      const checkCollision = () => {
+        const { collide: ucollide, spike: uspike, home: uhome } = overlaps(userX, userY);
+        const { collide: icollide, spike: ispike } = overlaps(userX, userY - 9);
+        userCollide = ucollide;
+        userSpike = uspike;
+        userHome = uhome;
+        itemCollide = icollide;
+        itemSpike = ispike;
+        return ucollide || (grabItem && icollide);
+      }
+      let collision = checkCollision();
+      if (collision && osy < -0.5) {
+        // if we collided, then check if we are jumping up, and *near* a gap
+        const checkAgain = (ux) => {
+          if (Math.abs(ux) - userX > 2)
+            return false;
+          const old = userX;
+          userX = ux;
+          collision = checkCollision();
+          if (collision) {
+            userX = old;
+            return false;
+          }
+          return true;
+        };
+        checkAgain(Math.floor(userX)) ||
+        checkAgain(Math.floor(userX) - 1) ||
+        checkAgain(Math.floor(userX) + 1) ||
+        checkAgain(Math.floor(userX) - 2) ||
+        checkAgain(Math.floor(userX) + 2);
+      }
+
+      if (grabItem && itemSpike)
+        explodeItem();
+      if (userSpike)
+        explodeUser();
+      if (userHome)
+        checkBeatGame();
+      if (collision) {
+        // revert
+        userY = oy;
+        velY = 0;
+        currentSY = osy;
+        if (currentSY > 0) {
+          const tx = (userX + 5) / 9;
+          const ty = (userY + 5) / 9;
+          const ncx = Math.floor(tx);
+          const ncy = Math.floor(ty);
+          const { solid } = getForce(ncx, ncy + 1);
+          if (solid) {
+            grounded = true;
+            groundedPos = [ncx, ncy + 1];
+          } else {
+            grounded = false;
+            const cx = Math.floor(userX / 9);
+            const cy = Math.floor((userY + 1) / 9);
+            const cw = Math.ceil((userX + 9) / 9);
+            const ch = Math.ceil((userY + 1 + 9) / 9);
+            for (let iy = cy; iy < ch && !grounded; iy++) {
+              for (let ix = cx; ix < cw && !grounded; ix++) {
+                if (getForce(ix, iy).solid) {
+                  grounded = true;
+                  groundedPos = [ix, iy];
+                }
+              }
+            }
+          }
+        }
+        doneY = true;
+      }
     }
-    if (x != g_camera.x || y != g_camera.y) {
-      camera_set(x, y);
+*/
+
+/*
+    if (grounded && Date.now() - lastWasGrounded > 250)
+      setTimeout(function(){ sfx.land.play(); }, 100);
+*/
     }
-    // game logic
+
+
+    g_spr.origin(g_user.sprite, Q.floor(g_user.x), Q.floor(g_user.y));
+
+    // move camera towards user
+    {
+      int targetX = g_user.x - Q(115);
+      int targetY = g_user.y - (g_user.grounded ? Q(106) : Q(97));
+      if (g_camera.followSnap) {
+        g_camera.followX = targetX;
+        g_camera.followY = targetY;
+        g_camera.followSnap = false;
+      } else {
+        int cameraLag = Q(0.11);
+        int cameraDist = Util::max(
+          Util::abs(g_camera.followX - targetX),
+          Util::abs(g_camera.followY - targetY)
+        );
+        if (cameraDist > Q(50)) { // if we're really far away, then move faster
+          cameraLag = Q.mul(cameraLag, Q(1) + Util::div<10>(cameraDist - Q(50)));
+        }
+        g_camera.followX -= Q.mul(g_camera.followX - targetX, cameraLag);
+        g_camera.followY -= Q.mul(g_camera.followY - targetY, cameraLag);
+      }
+      camera_set(g_camera.followX, g_camera.followY);
+    }
+
     nextframe();
   }
   return 0;

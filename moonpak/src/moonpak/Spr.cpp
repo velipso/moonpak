@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 #include "moonpak/Spr.hpp"
-#include "moonpak/util/ctz32.hpp"
-#include "moonpak/util/sin14.hpp"
+#include "moonpak/Util.hpp"
 #include "moonpak/atomic.hpp"
 #include "moonpak/mem.hpp"
 #include <stdlib.h>
@@ -40,7 +39,7 @@ namespace Anim {
 }
 #endif
 
-static inline u8 sprRand(Spr *spr) {
+static inline uint8_t sprRand(Spr *spr) {
   spr->seed = spr->seed * 1664525u + 1013904223u;
   return spr->seed >> 24;
 }
@@ -156,7 +155,7 @@ found_sizes:
 retry:
   for (int i = 0; i < 4; i++) {
     if (spr.avail[i]) {
-      int index = ctz32(spr.avail[i]);
+      int index = Util::ctz32(spr.avail[i]);
       uint32_t mask = 1u << index;
       if (atomicBitClear(&spr.avail[i], mask)) {
         handle = (i << 5) + index;
@@ -201,7 +200,7 @@ retry:
   spr.entries[handle]
     .pc(0)
     .flags(0)
-    .clone(clone >= 0)
+    .clone(clone >= 0 ? 1 : 0)
     .repeat(0)
     .spritesheet(0)
     .stackedWidth(stackedWidth)
@@ -904,8 +903,8 @@ xyrot_done:;
     }
     if (e.angDirty()) {
       e.angDirty(0);
-      int cos = sin14[e.rotateAngle() + 30] >> 6; // cos(ang);
-      int sin = sin14[e.rotateAngle()] >> 6;
+      int cos = Util::sin14[e.rotateAngle() + 30] >> 6; // cos(ang);
+      int sin = Util::sin14[e.rotateAngle()] >> 6;
       Oam::global->PABCD(e.rotateIndex(), cos, sin, -sin, cos);
     }
 next_entity:;

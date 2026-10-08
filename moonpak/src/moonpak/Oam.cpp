@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: 0BSD
 #include "moonpak/Oam.hpp"
-#include "moonpak/util/ctz32.hpp"
+#include "moonpak/Util.hpp"
 #include "moonpak/atomic.hpp"
 
 #ifdef TESTS
@@ -52,7 +52,7 @@ int8_t Oam::alloc(uint8_t priority) {
   for (int i = 0; i < 4; i++) {
 retry:
     if (handleAvail[i]) {
-      int index = ctz32(handleAvail[i]);
+      int index = Util::ctz32(handleAvail[i]);
       uint32_t mask = 1u << index;
       if (atomicBitClear(&handleAvail[i], mask)) {
         handle = (i << 5) + index;
@@ -203,7 +203,7 @@ int8_t Oam::allocRotate() {
   bool didRetry = false;
 retry:
   if (!rotateAvail) return -1;
-  int index = ctz32(rotateAvail);
+  int index = Util::ctz32(rotateAvail);
   uint32_t mask = 1u << index;
   if (atomicBitClear(&rotateAvail, mask)) {
     return index;

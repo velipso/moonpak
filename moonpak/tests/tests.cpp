@@ -10,8 +10,7 @@
 
 #define TESTS_GBA_MEM_IMPL
 #include "moonpak/mem.hpp"
-#include "moonpak/util/ctz32.cpp"
-#include "moonpak/util/sin14.cpp"
+#include "moonpak/Util.cpp"
 
 static TestBasic basic;
 static TestOam oam;

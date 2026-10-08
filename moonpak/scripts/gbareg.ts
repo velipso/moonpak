@@ -232,7 +232,7 @@ for (const register of [
     1 cgbMode
     1 frame
     1 hblankFree
-    1 obj2D
+    1 obj1D
     1 blank
     1 bg0
     1 bg1

@@ -1,0 +1,7 @@
+struct MapCell {
+  u16 {
+    u6 bg1;
+    u6 bg2;
+    u4 logic;
+  };
+};

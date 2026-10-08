@@ -855,7 +855,7 @@ function isRandom(odds) {
   return { isRandom: odds };
 }
 
-function prioritySet(value) {
+function priority(value) {
   if (!insideDefine) throw new Error(DEFINE_ERROR);
   if (isRandomValue(value)) {
     const { low, high } = validateRandomInt(value, 0, 255);
@@ -918,7 +918,7 @@ function rotateOrigin(x, y) {
   rotateOriginSetAxis('rotateOriginY', y, rangeError);
 }
 
-function angleSet(value) {
+function angle(value) {
   if (!insideDefine) throw new Error(DEFINE_ERROR);
   if (isRandomValue(value)) {
     const { low, high } = validateRandomInt(value, 0, 360, 3);
@@ -1031,16 +1031,16 @@ function makeSetAddPair(funcPrefix, format, varX, varY, kindX, kindY) {
   return { set: makeFunc('Set'), add: makeFunc('Add') };
 }
 
-const { set: gravitySet, add: gravityAdd } = makeSetAdd('gravity', '4.8');
-const { set: localXSet, add: localXAdd } = makeSetAdd('localX', '8.4');
-const { set: localYSet, add: localYAdd } = makeSetAdd('localY', '8.4');
-const { set: localDXSet, add: localDXAdd } = makeSetAdd('localDX', '8.4');
-const { set: localDYSet, add: localDYAdd } = makeSetAdd('localDY', '8.4');
-const { set: localSet, add: localAdd } = makeSetAddPair(
+const { set: gravity, add: gravityAdd } = makeSetAdd('gravity', '4.8');
+const { set: localX, add: localXAdd } = makeSetAdd('localX', '8.4');
+const { set: localY, add: localYAdd } = makeSetAdd('localY', '8.4');
+const { set: localDX, add: localDXAdd } = makeSetAdd('localDX', '8.4');
+const { set: localDY, add: localDYAdd } = makeSetAdd('localDY', '8.4');
+const { set: local, add: localAdd } = makeSetAddPair(
   'local', '8.4', 'x', 'y',
   'localX', 'localY'
 );
-const { set: localDSet, add: localDAdd } = makeSetAddPair(
+const { set: localD, add: localDAdd } = makeSetAddPair(
   'localD', '8.4', 'dx', 'dy',
   'localDX', 'localDY'
 );
@@ -1187,28 +1187,28 @@ Object.assign(globalThis, {
   wait,             // frames: 1-1000
   spritesheet,      // symbol: string
   jumpToAnimation,  // name: string
-  random,           // count: finite number | low: finite number, high: finite number
+  random,           // count: number | low: number, high: number
   copy,             // frame: 0-255 | random
-  prioritySet,      // value: 0-255 | random
+  priority,         // value: 0-255 | random
   priorityAdd,      // value: -128-127 | random
   rotateOriginX,    // x: -128-127 | random
   rotateOriginY,    // y: -128-127 | random
   rotateOrigin,     // x: -128-127 | random, y: -128-127 | random
-  angleSet,         // value: 0-360 divisible by 3 | random
+  angle,            // value: 0-360 divisible by 3 | random
   angleAdd,         // value: -360-360 divisible by 3 | random
-  gravitySet,       // value: -8-7.999 | random
+  gravity,          // value: -8-7.999 | random
   gravityAdd,       // value: -8-7.999 | random
-  localXSet,        // value: -128-127.999 | random
+  localX,           // value: -128-127.999 | random
   localXAdd,        // value: -128-127.999 | random
-  localYSet,        // value: -128-127.999 | random
+  localY,           // value: -128-127.999 | random
   localYAdd,        // value: -128-127.999 | random
-  localDXSet,       // value: -128-127.999 | random
+  localDX,          // value: -128-127.999 | random
   localDXAdd,       // value: -128-127.999 | random
-  localDYSet,       // value: -128-127.999 | random
+  localDY,          // value: -128-127.999 | random
   localDYAdd,       // value: -128-127.999 | random
-  localSet,         // x: -128-127.999 | random, y: -128-127.999 | random
+  local,            // x: -128-127.999 | random, y: -128-127.999 | random
   localAdd,         // x: -128-127.999 | random, y: -128-127.999 | random
-  localDSet,        // dx: -128-127.999 | random, dy: -128-127.999 | random
+  localD,           // dx: -128-127.999 | random, dy: -128-127.999 | random
   localDAdd,        // dx: -128-127.999 | random, dy: -128-127.999 | random
   not,              // condition
   isTrue,           // condition constant
@@ -1229,7 +1229,7 @@ Object.assign(globalThis, {
   doWhile,          // body: function, condition
   whileDo,          // condition, body: function
   ifThen,           // condition, trueBody: function, falseBody?: function
-  fire              // symbol: string, param: -8-7
+  fire              // symbol: string, param?: -8-7
 });
 
 await import(pathToFileURL(inputFile));

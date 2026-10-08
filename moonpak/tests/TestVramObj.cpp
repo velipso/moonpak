@@ -8,5 +8,5 @@ TestVramObj::TestVramObj() {
 }
 
 int TestVramObj::run(bool verbose) {
-  return VramObj::test(verbose);
+  return moonpak::VramObj::test(verbose);
 }

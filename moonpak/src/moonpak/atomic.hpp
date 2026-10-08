@@ -2,6 +2,8 @@
 #pragma once
 #include <stdint.h>
 
+namespace moonpak {
+
 #ifdef TESTS
 
 // define fake atomic actions for test suite
@@ -34,3 +36,5 @@ extern "C" {
 #define atomicBitSet    moonpak_atomicBitSet
 #define atomicBitClear  moonpak_atomicBitClear
 #endif // TESTS
+
+} // moonpak

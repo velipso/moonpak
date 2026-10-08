@@ -8,5 +8,5 @@ TestSpr::TestSpr() {
 }
 
 int TestSpr::run(bool verbose) {
-  return Spr::test(verbose);
+  return moonpak::Spr::test(verbose);
 }
