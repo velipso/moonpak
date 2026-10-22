@@ -52,6 +52,8 @@ const background = data.layers.find(d => d.name === 'background')?.data;
 if (!background) throw new Error('Missing "background" layer');
 const objects = data.layers.find(d => d.name === 'objects')?.data;
 if (!objects) throw new Error('Missing "objects" layer');
+const regions = data.layers.find(d => d.name === 'regions')?.objects;
+if (!regions) throw new Error('Missing "regions" layer');
 
 const tileAt = (layerData, x, y) => {
   let d = layerData[x + y * data.width];
@@ -97,17 +99,59 @@ const validateTile = (tile) => {
   return tile.d;
 };
 
+// maps tiles to logic type
+// 0 nothing
+// 1 solid
+// 2 anchor
+// 3 jetpack
+// 4 balloon
+// 5 fuse
+// 6 tnt
+// 7 non-solid wire
+// 8 solid wire
+// 9 coin
+// 10 spike
+// 11 ladder
+const logicTable = [
+  0, 0, 0, 0,10,10,11,11, 0, 0, 0, 0, 0, 0, 0, 0,
+  1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+  1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+  1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  9, 6, 5, 2, 3, 4, 7, 7, 7, 7, 7, 7, 7, 0, 0, 0,
+];
+
 for (let y = 0; y < data.height; y++) {
   for (let x = 0; x < data.width; x++) {
     let d1 = validateTile(tileAt(background, x, y));
     let d2 = validateTile(tileAt(objects, x, y));
-    // for now, just pack the tiles together
-    // TODO: make smarter
-    if (d1 >= 256) d1 -= 256;
-    if (d2 >= 256) d2 -= 256;
-    const logic = d1 <= 1 && d2 <= 1 ? 0 : 1; // TODO: this
+    let logic = logicTable[d2];
+    if (logic === 7) { // non-solid wire
+      if (logicTable[d1]) {
+        logic = 8; // solid wire
+      }
+    } else if (logic === 0) {
+      logic = logicTable[d1];
+    }
+    if (d1 >= 64) d1 -= 64;
+    if (d2 >= 64) d2 -= 64;
     out.push(d1 | (d2 << 6) | (logic << 12));
   }
+}
+
+// output regions
+const regionTypes = ['inside', 'start'];
+out.push(regions.length);
+for (const rect of regions) {
+  const t = regionTypes.indexOf(rect.type);
+  if (t < 0) throw new Error(`Unknown region type: ${rect.type}`);
+  out.push(t);
+  out.push(Math.floor(rect.x / 10));
+  out.push(Math.floor(rect.y / 10));
+  out.push(Math.floor(rect.width / 10));
+  out.push(Math.floor(rect.height / 10));
 }
 
 // output file

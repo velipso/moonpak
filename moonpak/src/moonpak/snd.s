@@ -85,7 +85,7 @@ moonpak_sndQuantize8:
     ldrsh   r3, [r2], #2      // sample = *bufferTemp++
     mov     r3, r3, asr #4    // 12-bit -> 8-bit (MOONPAK_SAMPLE_SHIFT - 8)
 
-    @ clamp r3 to -128..127 (magic)
+    // clamp r3 to -128..127 (magic)
     mov     r12, r3, lsl #24
     cmp     r3, r12, asr #24
     eorne   r3, r4, r3, asr #32

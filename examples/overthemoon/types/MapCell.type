@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: 0BSD
+
 struct MapCell {
   u16 {
     u6 bg1;

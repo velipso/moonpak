@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: 0BSD
 #include "main.hpp"
 #include "types/MapCell.hpp"
+#include "types/MapLogic.hpp"
 #include "data/palette.hpp"
 #include "data/animations.hpp"
 #include "data/songs/outro.hpp"
@@ -14,10 +15,15 @@ Snd g_snd(2, 4);
 
 static uint8_t g_bg2MapBuffer[64 * 64];
 static uint8_t g_bg3MapBuffer[64 * 64];
-static uint8_t *g_logic;
+static MapLogic *g_logic;
 static int g_mapWidth;
 static int g_mapHeight;
+static int g_homeX;
+static int g_homeY;
+static int g_pushed;
 static inline constexpr Fix Q{8};
+static int s_cursor;
+static int s_place;
 
 using TileMap = VramMap::Affine<512, 512>;
 
@@ -44,6 +50,16 @@ static struct {
   int gy;
   bool grounded;
 } g_user;
+
+static struct {
+  int sprite;
+  int item;
+  int dir;
+  int grabbing;
+  int placing;
+  int tx; // source tile
+  int ty;
+} g_grab;
 
 static const int scroll[] = {
   // for (var i = 0; i < 320; i++) console.log(Math.round(i * 256 * 8/5));
@@ -75,7 +91,9 @@ static const int scroll[] = {
 
 static void irq_vblank() {
   Inp::update();
+  Reg::IME::set(1); // allow sound engine to interrupt vblank
   Rnd::update();
+
   int mx = Util::emod<320>(Q.floor(g_camera.x));
   int my = Util::emod<320>(Q.floor(g_camera.y));
   int x = scroll[mx];
@@ -116,9 +134,27 @@ static void copyTileMap(
       int tx = x + sx;
       int ty = y + sy;
 
-      MapCell cell = { mapData[(tx >> 1) + (ty >> 1) * g_mapWidth] };
+      int k = (tx >> 1) + (ty >> 1) * g_mapWidth;
+      MapCell cell = { mapData[k] };
       int tile1 = cell.bg1();
       int tile2 = cell.bg2();
+
+      if (g_logic[k].dirty()) {
+        switch (g_logic[k].type()) {
+          case 0: // nothing
+            tile2 = 0;
+            break;
+          case 2: // anchor
+            tile2 = 51;
+            break;
+          case 3: // jetpack
+            tile2 = 52;
+            break;
+          case 4: // balloon
+            tile2 = 53;
+            break;
+        }
+      }
 
       int tile1X = tile1 & 0xf;
       int tile1Y = tile1 >> 4;
@@ -169,20 +205,80 @@ static void camera_set(int x, int y) {
   g_camera.mapY = mapY;
 }
 
-static int check_collision() {
-  int ux = Q.floor(g_user.x);
-  int uy = Q.floor(g_user.y);
-  int x1 = Util::div<10>(ux);
-  int y1 = Util::div<10>(uy);
-  int x2 = Util::div<10>(ux + 9);
-  int y2 = Util::div<10>(uy + 9);
-  if (x1 < 0 || x2 >= g_mapWidth || y1 < 0 || y2 >= g_mapHeight) {
-    return 1;
+static MapLogicFlags map_logic_tile(int tx, int ty, MapLogicFlags result) {
+  if (tx < 0 || tx >= g_mapWidth || ty < 0 || ty >= g_mapHeight) {
+    return result.flags(0).solid(1).spike(1);
   }
-  int k = x1 + y1 * g_mapWidth;
-  int kx = x2 > x1 ? 1 : 0;
-  int ky = y2 > y1 ? g_mapWidth : 0;
-  return g_logic[k] | g_logic[k + kx] | g_logic[k + ky] | g_logic[k + kx + ky];
+
+  if (tx == g_homeX && ty == g_homeY) {
+    result.home(1);
+  }
+
+  MapLogic logic = g_logic[tx + ty * g_mapWidth];
+  result.inside(result.inside() | logic.inside());
+  if (logic.type()) {
+    result.type(logic.type());
+  }
+
+  switch (logic.type()) {
+    case 0: // nothing
+      break;
+    case 1: // solid
+      result.solid(1);
+      break;
+    case 2: // anchor
+      result.solid(1).grab(1);
+      break;
+    case 3: // jetpack
+      result.solid(1).grab(1);
+      break;
+    case 4: // balloon
+      result.solid(1).grab(1);
+      break;
+    case 5: // fuse
+      result.solid(1).grab(1);
+      break;
+    case 6: // tnt
+      result.solid(1).explode(1);
+      break;
+    case 7: // non-solid wire
+      result.explode(1);
+      break;
+    case 8: // solid wire
+      result.solid(1).explode(1);
+      break;
+    case 9: // coin
+      result.coin(1);
+      break;
+    case 10: // spike
+      result.solid(1).spike(1);
+      break;
+    case 11: // ladder
+      result.ladder(1);
+      break;
+  }
+  return result;
+}
+
+static MapLogicFlags map_logic_tile(int tx, int ty) {
+  MapLogicFlags result = {0};
+  return map_logic_tile(tx, ty, result);
+}
+
+static MapLogicFlags map_logic(int x, int y, MapLogicFlags result) {
+  int tx = Util::div<10>(Q.floor(x));
+  int ty = Util::div<10>(Q.floor(y));
+  return map_logic_tile(tx, ty, result);
+}
+
+static MapLogicFlags map_logic(int x, int y) {
+  MapLogicFlags result = {0};
+  return map_logic(x, y, result);
+}
+
+static void map_logic_set_type(int tx, int ty, int type) {
+  g_logic[tx + ty * g_mapWidth].type(type).dirty(1);
+  TileMap::copy(tx << 1, ty << 1, 2, 2, copyTileMap);
 }
 
 extern "C" int main() {
@@ -266,48 +362,178 @@ extern "C" int main() {
     }
   }
 
-  // initialize camera off-map, so camera_set will paint entire map
+  // load map size
   const uint16_t *mapData = (const uint16_t *)dataTilemapsWorld;
   g_mapWidth = *mapData++;
   g_mapHeight = *mapData++;
 
-  g_logic = (uint8_t *)calloc(g_mapWidth * g_mapHeight, 1);
+  // load logic
+  g_logic = (MapLogic *)calloc(g_mapWidth * g_mapHeight, sizeof(MapLogic));
+  for (int y = 0, k = 0; y < g_mapHeight; y++) {
+    for (int x = 0; x < g_mapWidth; x++, k++) {
+      MapCell cell = { *mapData++ };
+      g_logic[k].type(cell.logic());
+    }
+  }
+
+  // load and process regions
+  int totalRegions = *mapData++;
+  for (int r = 0; r < totalRegions; r++) {
+    int type = *mapData++;
+    int x = *mapData++;
+    int y = *mapData++;
+    int width = *mapData++;
+    int height = *mapData++;
+    switch (type) {
+      case 0: // inside
+        for (int dy = 0; dy < height; dy++) {
+          for (int dx = 0; dx < width; dx++) {
+            g_logic[x + dx + (y + dy) * g_mapWidth].inside(1);
+          }
+        }
+        break;
+      case 1: // start
+        g_homeX = g_user.x = Q(x * 10);
+        g_homeY = g_user.y = Q(y * 10);
+        break;
+    }
+  }
+
+  // initialize camera off-map, so camera_set will paint entire map
   g_camera.x = g_mapWidth * 10;
   g_camera.y = g_mapHeight * 10;
   g_camera.mapX = g_mapWidth;
   g_camera.mapY = g_mapHeight;
   g_camera.followSnap = true;
-
-  for (int y = 0, k = 0; y < g_mapHeight; y++) {
-    for (int x = 0; x < g_mapWidth; x++, k++) {
-      MapCell cell = { mapData[k] };
-      g_logic[k] = cell.logic();
-    }
-  }
-
   camera_set(0, 0);
 
-  g_user.x = Q(1230);
-  g_user.y = Q(1070);
-
-  g_user.sprite = g_spr.alloc(16, 16, 0, true);
+  g_user.sprite = g_spr.alloc(16, 16, 1, true);
   g_spr.entry(g_user.sprite)
     .show(true)
     .anim(Anim::heroC);
 
+  s_cursor = g_spr.alloc(16, 16, 0, true);
+  g_spr.entry(s_cursor)
+    .show(true)
+    .anim(Anim::cursor);
+
+  s_place = g_spr.alloc(16, 16, 2, true);
+  g_spr.entry(s_place)
+    .show(true)
+    .anim(Anim::place);
+
+  g_grab.item = 0;
+  g_grab.grabbing = 0;
+  g_grab.placing = 0;
+  g_grab.sprite = g_spr.alloc(16, 16, 1, true);
+
   for (;;) {
-    // move user
-    {
+    { // move user
       g_user.fx = 0;
       g_user.fy = 0;
       int h = 0;
       int v = 0;
 
-      h = Inp::dx();
-      v = Inp::dy();
-
-      if (Inp::A.hit() && g_user.grounded) {
-        g_user.fy += Q(-6.67);
+      /*
+      if (!grabItem && input.hitGrab && grounded && pushed && !overlaps(userX, userY - 9).collide) {
+        const ax = Math.floor(userX / 9) + pushed;
+        const { item } = getForce(ax, Math.floor(userY / 9));
+        if (item > 0) {
+          if (tutorial === 4 || tutorial === 5)
+            tutorial = 6;
+          sfx.lift.play();
+          const k = ax + cy * worldWidth;
+          world[k] = world[k] & maskNoItem;
+          // check for falling items
+          itemFalling = [];
+          for (let ay = cy - 1; ay >= 0; ay--) {
+            const { item } = getForce(ax, ay);
+            if (!item)
+              break;
+            const k = ax + ay * worldWidth;
+            world[k] = world[k] & maskNoItem;
+            itemFalling.push([ax, ay, item]);
+          }
+          ...
+          if ((grabItem & 0xfff) === 4) {
+            const k = ax + (cy + 1) * worldWidth;
+            world[k] = (world[k] & maskNoItem) | (6 << 15);
+            explode(ax, cy + 1, 30, 5);
+            exploded.push(k - worldWidth); // remove fuse
+          }
+        }
+      }
+      */
+      if (
+        !g_grab.item && // no currently grabbed item
+        Inp::B.hit() && // are we trying to grab?
+        g_user.grounded && // are we on the ground?
+        g_pushed && // are we pushing against something?
+        !map_logic(g_user.x, g_user.y - Q(10)).solid() // is there room above us to lift something?
+      ) {
+        int tx = Util::div<10>(Q.floor(g_user.x));
+        int ty = Util::div<10>(Q.floor(g_user.y));
+        MapLogicFlags flags = map_logic_tile(tx + g_pushed, ty);
+        if (flags.grab()) {
+          // grab the item!
+          g_user.fx = 0;
+          g_user.fy = 0;
+          g_user.vx = 0;
+          g_user.vy = 0;
+          g_grab.item = flags.type();
+          g_grab.dir = g_pushed;
+          g_grab.grabbing = 1;
+          g_grab.tx = tx + g_pushed;
+          g_grab.ty = ty;
+          g_spr.show(g_grab.sprite, true).priority(g_grab.sprite, 0);
+          switch (flags.type()) {
+            case 2: g_spr.anim(g_grab.sprite, Anim::itemAnchor); break;
+            case 3: g_spr.anim(g_grab.sprite, Anim::itemJetpack); break;
+            case 4: g_spr.anim(g_grab.sprite, Anim::itemBalloon); break;
+            case 5: g_spr.anim(g_grab.sprite, Anim::itemFuse); break;
+          }
+          // move user to edge of pixel boundary
+          g_user.x = g_pushed > 0 ? Q(tx * 10 + 1) - 1 : Q(tx * 10);
+          g_user.y = Q(ty * 10 + 1) - 1;
+          map_logic_set_type(tx + g_pushed, ty, 0);
+          g_pushed = 0;
+        }
+      } else if (g_grab.item && Inp::B.hit() && g_user.grounded) {
+        // TODO: placing item
+        /*
+        placePos = [groundedPos[0], groundedPos[1] - 1];
+        let canPlace = true;
+        if (isPrize(grabItem)) {
+          // verify we can place it here, at home
+          const p = prizes.find(p => p.item === grabItem);
+          canPlace = placePos[0] === p.hx && placePos[1] === p.hy;
+        } else {
+          // don't allow other objects in prize homes
+          canPlace = !prizes.find(p => placePos[0] === p.hx && placePos[1] === p.hy);
+        }
+        if (canPlace) {
+          sfx.drop.play();
+          forceX = 0;
+          forceY = 0;
+          velX = 0;
+          velY = 0;
+          placing = 1;
+          placeUserMove = [userY, userY - 9];
+        }
+        */
+        g_user.fx = 0;
+        g_user.fy = 0;
+        g_user.vx = 0;
+        g_user.vy = 0;
+        g_grab.placing = 1;
+        g_spr.priority(g_grab.sprite, 0);
+      } else if (g_grab.grabbing || g_grab.placing) {
+        // don't allow movement
+      } else {
+        h = Inp::dx();
+        if (Inp::A.hit() && g_user.grounded) {
+          g_user.fy += Q(-6.67);
+        }
       }
 
       g_user.fx += h * Q(0.5);
@@ -325,7 +551,8 @@ extern "C" int main() {
       int ox, oy, osx, osy;
       bool doneX = false;
       bool doneY = false;
-      bool change;
+      int change = 0;
+      int ioy = g_grab.item ? Q(-10) : 0;
       g_user.grounded = false;
 
       while ((currentSX != 0 && !doneX) || (currentSY != 0 && !doneY)) {
@@ -334,7 +561,6 @@ extern "C" int main() {
         osx = currentSX;
         osy = currentSY;
 
-        change = true;
         { // step X
           if (currentSX > 0) {
             // enough velocity to advance one pixel?
@@ -348,6 +574,7 @@ extern "C" int main() {
               g_user.x += currentSX;
               currentSX = 0;
             }
+            change = 1;
           } else if (currentSX < 0) {
             // any remainder?
             if (remainderX + currentSX < 0 && remainderX != 0) {
@@ -360,22 +587,31 @@ extern "C" int main() {
               g_user.x += currentSX;
               currentSX = 0;
             }
+            change = -1;
           } else {
-            change = false;
+            change = 0;
           }
         }
 
-        if (change) { // check for collision
-          int c = check_collision();
-          if (c) {
+        // check for collision
+        if (change) {
+          int ux = g_user.x + (change > 0 ? Q(9) : 0);
+          MapLogicFlags flags = map_logic(
+            ux,
+            g_user.y + ioy,
+            map_logic(ux, g_user.y, map_logic(ux, g_user.y + Q(9)))
+          );
+          if (flags.solid()) {
+            g_pushed = flags.grab() ? change : 0;
             g_user.x = ox;
             g_user.vx = 0;
             currentSX = osx;
             doneX = true;
+          } else {
+            g_pushed = 0;
           }
         }
 
-        change = true;
         { // step Y
           if (currentSY > 0) {
             // enough velocity to advance one pixel?
@@ -389,6 +625,7 @@ extern "C" int main() {
               g_user.y += currentSY;
               currentSY = 0;
             }
+            change = 1;
           } else if (currentSY < 0) {
             // any remainder?
             if (remainderY + currentSY < 0 && remainderY != 0) {
@@ -401,19 +638,45 @@ extern "C" int main() {
               g_user.y += currentSY;
               currentSY = 0;
             }
+            change = -1;
           } else {
-            change = false;
+            change = 0;
           }
         }
 
-        if (change) { // check for collision
-          int c = check_collision();
-          if (c) {
+        // check for collision
+        if (change > 0) {
+          int ty = Util::div<10>(Q.floor(g_user.y + Q(9)));
+          int tx1 = Util::div<10>(Q.floor(g_user.x));
+          int tx2 = Util::div<10>(Q.floor(g_user.x + Q(4.5)));
+          int tx3 = Util::div<10>(Q.floor(g_user.x + Q(9)));
+          MapLogicFlags f1 = map_logic_tile(tx1, ty);
+          MapLogicFlags f2 = map_logic_tile(tx2, ty);
+          MapLogicFlags f3 = map_logic_tile(tx3, ty);
+          if (f2.solid()) {
+            g_user.gx = tx2;
+            goto y_solid_down;
+          } else if (f1.solid()) {
+            g_user.gx = tx1;
+            goto y_solid_down;
+          } else if (f3.solid()) {
+            g_user.gx = tx3;
+y_solid_down:
+            g_user.gy = ty;
+            g_user.grounded = true;
+            goto y_solid;
+          }
+        } else if (change < 0) {
+          if (map_logic(
+            g_user.x,
+            g_user.y + ioy,
+            map_logic(g_user.x + Q(9), g_user.y + ioy)
+          ).solid()) {
+y_solid:
             g_user.y = oy;
             g_user.vy = 0;
             currentSY = osy;
             doneY = true;
-            g_user.grounded = true;
           }
         }
       }
@@ -517,18 +780,69 @@ extern "C" int main() {
       }
     }
 */
-
-/*
-    if (grounded && Date.now() - lastWasGrounded > 250)
-      setTimeout(function(){ sfx.land.play(); }, 100);
-*/
     }
 
+    { // stop user if moving really slowly
+      int epsilon = Q(0.1);
+      if (Util::abs(g_user.vx) < epsilon) g_user.vx = 0;
+      if (Util::abs(g_user.vy) < epsilon) g_user.vy = 0;
+    }
 
-    g_spr.origin(g_user.sprite, Q.floor(g_user.x), Q.floor(g_user.y));
+    // move user sprite to user location
+    g_spr.origin(g_user.sprite, Q.floor(g_user.x), Q.floor(g_user.y) - g_grab.placing);
 
-    // move camera towards user
-    {
+    // show grabbed item
+    if (g_grab.item) {
+      if (g_grab.grabbing) {
+        g_spr.origin(
+          g_grab.sprite,
+          Q.floor(g_user.x) + (10 - g_grab.grabbing) * g_grab.dir,
+          Q.floor(g_user.y) - g_grab.grabbing
+        );
+        g_grab.grabbing++;
+        if (g_grab.grabbing > 10) {
+          g_spr.priority(g_grab.sprite, 2);
+          g_grab.grabbing = 0;
+        }
+      } else if (g_grab.placing) {
+        g_spr.origin(
+          g_grab.sprite,
+          g_user.gx * 10,
+          Q.floor(g_user.y) - 10 + g_grab.placing
+        );
+        g_grab.placing += 2;
+        if (g_grab.placing > 10) {
+          // place item
+          g_grab.placing = 0;
+          map_logic_set_type(g_user.gx, g_user.gy - 1, g_grab.item);
+          g_user.y -= Q(10);
+          g_grab.item = 0;
+          g_spr.show(g_grab.sprite, false);
+        }
+      } else {
+        g_spr.origin(g_grab.sprite, Q.floor(g_user.x), Q.floor(g_user.y) - 10);
+      }
+    }
+
+    // show cursors
+    g_spr.show(s_cursor, false);
+    g_spr.show(s_place, false);
+    if (g_user.grounded && !g_grab.grabbing && !g_grab.placing) {
+      if (g_grab.item) {
+        g_spr.show(s_place, true);
+        g_spr.origin(s_place, g_user.gx * 10, g_user.gy * 10);
+      } else if (g_pushed) {
+        int tx = Util::div<10>(Q.floor(g_user.x));
+        int ty = Util::div<10>(Q.floor(g_user.y));
+        MapLogicFlags flag = map_logic_tile(tx + g_pushed, ty);
+        if (flag.grab()) {
+          g_spr.origin(s_cursor, (tx + g_pushed) * 10, ty * 10);
+          g_spr.show(s_cursor, true);
+        }
+      }
+    }
+
+    { // move camera towards user
       int targetX = g_user.x - Q(115);
       int targetY = g_user.y - (g_user.grounded ? Q(106) : Q(97));
       if (g_camera.followSnap) {

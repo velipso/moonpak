@@ -12,17 +12,20 @@ Oam g_oam;
 VramObj g_vramObj;
 Spr g_spr;
 Snd g_snd(2, 4);
+inline constexpr Fix Q{6};
 
 static Player g_player = {0};
 
 static void irq_vblank() {
   Inp::update();
+  Reg::IME::set(1); // allow sound engine to interrupt vblank
   Rnd::update();
   g_oam.copy(); // copy shadow OAM to real OAM
   g_spr.copy(); // copy queued tiles to VRAM
 }
 
 static inline void nextframe() {
+  //g_spr.world(worldX, worldY); // set world coordinates (if used)
   g_spr.tick(); // advance animations
   Swi::vblankIntrWait();
   g_snd.copy(); // process sound engine
@@ -79,15 +82,17 @@ extern "C" int main() {
     .show(true)
     .anim(Anim::heroIdle);
 
-  // player position is Q10.6 fixed point
-  g_player.x(120 << 6);
-  g_player.y(80 << 6);
+  // player position is fixed point
+  g_player.x(Q(120));
+  g_player.y(Q(80));
 
   for (;;) {
     // update X movement
-    int ndx = g_player.dx() + Inp::dx() * 15;
-    if (ndx < -150) ndx = -150;
-    else if (ndx > 150) ndx = 150;
+    int ndx = Util::clamp(
+      g_player.dx() + Inp::dx() * Q(0.25),
+      Q(-2.5),
+      Q(2.5)
+    );
     if (Inp::dx() == 0) {
       ndx >>= 1;
     }
@@ -95,12 +100,12 @@ extern "C" int main() {
 
     // process jump
     if (Inp::A.hit() && g_player.grounded()) {
-      g_player.dy(-300);
+      g_player.dy(Q(-4.7));
       g_player.grounded(0);
       s_player.anim(Anim::heroUp);
       g_snd.playSfx(Sfx::jump, Sfx::jumpSize, 0);
     } else {
-      int ndy = g_player.dy() + 15;
+      int ndy = g_player.dy() + Q(0.25);
       if (g_player.dy() < 0 && ndy >= 0) {
         // transition at peak of jump
         s_player.anim(Anim::heroDown);
@@ -113,16 +118,16 @@ extern "C" int main() {
     if (nx < 0) {
       nx = 0;
       if (g_player.dx() < 0) g_player.dx(0);
-    } else if (nx > ((240 - 8) << 6)) {
-      nx = (240 - 8) << 6;
+    } else if (nx > Q(240 - 8)) {
+      nx = Q(240 - 8);
       if (g_player.dx() > 0) g_player.dx(0);
     }
     g_player.x(nx);
 
     // update player Y position
     int ny = g_player.y() + g_player.dy();
-    if (ny > (80 << 6)) {
-      ny = 80 << 6;
+    if (ny > Q(80)) {
+      ny = Q(80);
       if (!g_player.grounded()) {
         s_player.anim(Anim::heroIdle);
         g_player.grounded(1);
@@ -132,7 +137,7 @@ extern "C" int main() {
     g_player.y(ny);
 
     // update player sprite origin
-    s_player.origin(g_player.x() >> 6, g_player.y() >> 6);
+    s_player.origin(Q.floor(g_player.x()), Q.floor(g_player.y()));
 
     nextframe();
   }

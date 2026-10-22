@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: 0BSD
+
+// MapLogic is stored in EWRAM for each cell of the map
+struct MapLogic {
+  u8 {
+    u4 type;
+    u1 inside;
+    u1 dirty;
+    u2;
+  };
+};
+
+// MapLogicFlags is generated from MapLogic in order to describe tile attributes
+struct MapLogicFlags {
+  u32 {
+    u4 type;
+    u1 inside;
+    u1 solid;
+    u1 grab;
+    u1 explode;
+    u1 coin;
+    u1 spike;
+    u1 ladder;
+    u1 checkpoint;
+    u1 home;
+    u19;
+  } flags;
+};
